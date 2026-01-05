@@ -1,5 +1,5 @@
 //@version=5
-indicator("4H Alternating BUY/SELL — SELL Score (A+C+D) + Liq x100 + PnL$ + MACD", overlay=true, max_labels_count=500)
+indicator("Algo BUY/SELL (unchanged) + MACD Display (fixed TF, no impact)", overlay=true, max_labels_count=500)
 
 // ━━━━━━━━━━━━━ INPUTS ━━━━━━━━━━━━━
 // BUY (simple 2-step oversold bounce)
@@ -11,7 +11,7 @@ buyExpiry  = input.int(200, "BUY Arm Expiry (bars)", minval=5)
 // SELL score threshold
 sellScoreThresh = input.int(3, "SELL score threshold (1-5)", minval=1, maxval=5)
 
-// A) Momentum fade
+// A) Momentum fade (signal logic uses chart TF)
 rsiFadeLvl   = input.int(55, "A: RSI fade level (crossunder)", minval=1, maxval=99)
 macdFast     = input.int(12, "MACD fast", minval=1)
 macdSlow     = input.int(26, "MACD slow", minval=1)
@@ -36,37 +36,58 @@ maintBuf    = input.float(0.005, "Maintenance buffer (0.5%)", step=0.001)
 // Visuals
 showTradeLabels = input.bool(true, "Afficher labels trade")
 showScoreLabel  = input.bool(false, "Afficher SELL score (debug)")
-showMACD        = input.bool(true, "Afficher MACD (bas du chart)")
 
-// ━━━━━━━━━━━━━ INDICATORS ━━━━━━━━━━━━━
-rsi = ta.rsi(close, rsiLen)
-[macdLine, signalLine, hist] = ta.macd(close, macdFast, macdSlow, macdSig)
-atr = ta.atr(atrLen)
-
-// ━━━━━━━━━━━━━ MACD DISPLAY (BOTTOM BAND) ━━━━━━━━━━━━━
-// On compresse le MACD pour qu'il soit visible sans écraser le prix
+// ━━━━━━━━━━━━━ MACD DISPLAY (fixed TF, NO IMPACT on signals) ━━━━━━━━━━━━━
+showMACD  = input.bool(true, "Afficher MACD (TF fixée, bas du chart)")
+macdTF    = input.timeframe("M", "MACD Timeframe affichage (ex: M, W, D, 240)")
 macdScale = input.float(0.02, "MACD visual scale", step=0.005)
 
+// If you ever want to use MACD TF in logic (OFF by default)
+useMacdTfInScore = input.bool(false, "⚠️ Utiliser MACD TF fixée dans le SELL score (change les signaux)")
+
+// ━━━━━━━━━━━━━ INDICATORS (chart TF) ━━━━━━━━━━━━━
+rsi = ta.rsi(close, rsiLen)
+atr = ta.atr(atrLen)
+
+// MACD on chart TF (this is the original logic MACD)
+[macdLine, signalLine, hist] = ta.macd(close, macdFast, macdSlow, macdSig)
+
+// ━━━━━━━━━━━━━ MACD on fixed TF (DISPLAY ONLY by default) ━━━━━━━━━━━━━
+f_macdLine() =>
+    [m, s, h] = ta.macd(close, macdFast, macdSlow, macdSig)
+    m
+f_macdSignal() =>
+    [m, s, h] = ta.macd(close, macdFast, macdSlow, macdSig)
+    s
+f_macdHist() =>
+    [m, s, h] = ta.macd(close, macdFast, macdSlow, macdSig)
+    h
+
+macdLineTF   = request.security(syminfo.tickerid, macdTF, f_macdLine())
+signalLineTF = request.security(syminfo.tickerid, macdTF, f_macdSignal())
+histTF       = request.security(syminfo.tickerid, macdTF, f_macdHist())
+
+// Plot MACD “band” at bottom of price chart
 macdBase = low - atr * 2.5
-macdLinePlot   = macdBase + macdLine * macdScale
-signalLinePlot = macdBase + signalLine * macdScale
-histPlot       = macdBase + hist * macdScale
+plot(showMACD ? (macdBase + macdLineTF * macdScale)   : na, title="MACD Line (fixed TF)",   color=color.blue,   linewidth=2)
+plot(showMACD ? (macdBase + signalLineTF * macdScale) : na, title="Signal Line (fixed TF)", color=color.orange, linewidth=1)
+plot(showMACD ? (macdBase + histTF * macdScale)       : na, title="MACD Hist (fixed TF)",   style=plot.style_columns,
+     color=(histTF >= 0 ? color.new(color.green, 30) : color.new(color.red, 30)))
 
-plot(showMACD ? macdLinePlot   : na, title="MACD Line",   color=color.blue,  linewidth=2)
-plot(showMACD ? signalLinePlot : na, title="Signal Line", color=color.orange,linewidth=1)
-plot(showMACD ? histPlot       : na, title="MACD Hist",   style=plot.style_columns,
-     color=hist >= 0 ? color.new(color.green, 30) : color.new(color.red, 30))
+// ━━━━━━━━━━━━━ SELL SCORE LOGIC (UNCHANGED by default) ━━━━━━━━━━━━━
+// Choose which histogram to use in score:
+histForScore = useMacdTfInScore ? histTF : hist
 
-// ━━━━━━━━━━━━━ SELL SCORE LOGIC ━━━━━━━━━━━━━
 rsiFade = ta.crossunder(rsi, rsiFadeLvl)
 
+// hist decreasing for N bars (based on chosen hist)
 histDec = true
 for i = 0 to histDecBars - 1
-    histDec := histDec and (hist[i] < hist[i + 1])
+    histDec := histDec and (histForScore[i] < histForScore[i + 1])
 
-momFadeOK = rsiFade or (hist > 0 and histDec)
+momFadeOK = rsiFade or (histForScore > 0 and histDec)
 
-// Break structure
+// Break structure (chart TF)
 pLow = ta.pivotlow(low, pivotL, pivotR)
 var float lastSwingLow = na
 if not na(pLow)
@@ -74,14 +95,14 @@ if not na(pLow)
 
 breakStruct = not na(lastSwingLow) and (requireBreakClose ? close < lastSwingLow : low < lastSwingLow)
 
-// Chandelier
+// Chandelier (chart TF)
 chandelierStop = ta.highest(high, trailLookback) - atr * trailATRmult
 trailBreak = ta.crossunder(close, chandelierStop)
 
-// Bonus momentum
+// Bonus momentum points (keep same behavior: based on chart RSI + chosen hist)
 overboughtRecently = ta.highest(rsi, 100) >= 70
 scoreOB = overboughtRecently ? 1 : 0
-scoreHistNeg = hist < 0 ? 1 : 0
+scoreHistNeg = histForScore < 0 ? 1 : 0
 
 sellScore = (momFadeOK ? 1 : 0) + (breakStruct ? 1 : 0) + (trailBreak ? 1 : 0) + scoreOB + scoreHistNeg
 
@@ -90,20 +111,22 @@ var bool inTrade = false
 var bool armedBuy = false
 var int  armedBuyAt = na
 
-armBuyCond = not inTrade and rsi <= armLvl
+armBuyCond = (not inTrade) and (rsi <= armLvl)
 if armBuyCond
     armedBuy := true
     armedBuyAt := bar_index
 
-if armedBuy and bar_index - armedBuyAt > buyExpiry
+if armedBuy and not na(armedBuyAt) and (bar_index - armedBuyAt > buyExpiry)
     armedBuy := false
+    armedBuyAt := na
 
-buySig = not inTrade and armedBuy and ta.crossover(rsi, buyConfirm)
+buySig = (not inTrade) and armedBuy and ta.crossover(rsi, buyConfirm)
 if buySig
     inTrade := true
     armedBuy := false
+    armedBuyAt := na
 
-sellSig = inTrade and sellScore >= sellScoreThresh
+sellSig = inTrade and (sellScore >= sellScoreThresh)
 if sellSig
     inTrade := false
 
@@ -116,12 +139,12 @@ var float entryPrice = na
 if buySig
     entryPrice := close
     if showTradeLabels
-        label.new(bar_index, low,"BUY\nEntry: " + str.tostring(close, "#.##") +"\nLiq x" + str.tostring(leverage) + ": " + str.tostring(f_liq_long(close, leverage, maintBuf), "#.##"),style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white)
+        label.new(bar_index, low,"BUY\nEntry: " + str.tostring(close, "#.##") +"\nLiq x" + str.tostring(leverage) + ": " + str.tostring(f_liq_long(close, leverage, maintBuf), "#.##") +"\nMACD display TF: " + macdTF,style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white)
 
 if sellSig and not na(entryPrice)
     pnlUsd = notionalUsd * (close - entryPrice) / entryPrice
     if showTradeLabels
-        label.new(bar_index, high,"SELL\nPnL: $" + str.tostring(pnlUsd, "#.##"),style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white)
+        label.new(bar_index, high,"SELL\nPnL: $" + str.tostring(pnlUsd, "#.##") +"\nMACD display TF: " + macdTF,style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white)
     entryPrice := na
 
 // ━━━━━━━━━━━━━ SIGNAL MARKERS ━━━━━━━━━━━━━
