@@ -217,7 +217,7 @@ plot(showLevels and inTrade and not na(stopLoss) ? stopLoss : na,
 plot(showLevels and inTrade and not na(liqPrice) ? liqPrice : na, 
      "Liquidation", color=color.new(color.maroon, 0), linewidth=2, style=plot.style_linebr)
 plot(showLevels and inTrade and useFixedTP and not na(fixedTP) ? fixedTP : na, 
-     "Fixed TP", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
+     "Fixed TP", color=color.new(#55ffc6, 0), linewidth=2, style=plot.style_linebr)
 plot(showLevels and inTrade ? entryPrice : na, 
      "Entry", color=color.new(color.white, 50), linewidth=1, style=plot.style_circles)
 
@@ -229,7 +229,7 @@ if buySig and showLabels and not na(stopLoss)
     // Create new label on entry
     labelText = "🚀 LONG x" + str.tostring(leverage) + "\n" + "━━━━━━━━━━━━━━\n" + "Entry: $" + str.tostring(entryPrice, "#.##") + "\n" + "Stop: $" + str.tostring(stopLoss, "#.##") + "\n" + "Liq: $" + str.tostring(liqPrice, "#.##") + "\n" + "Exit: PENDING\n" + "━━━━━━━━━━━━━━\n" + "PnL: $0.00\n" + "Status: IN TRADE"
     
-    tradeLabel := label.new(bar_index, low * 0.999, labelText, style=label.style_label_up, color=color.new(color.blue, 0), textcolor=color.white, size=size.normal,textalign=text.align_left)
+    tradeLabel := label.new(bar_index, low * 0.999, labelText, style=label.style_label_up, color=color.new(#2195f3, 90), textcolor=color.white, size=size.normal,textalign=text.align_left)
 
 // Update label while in trade (show current unrealized PnL)
 if inTrade and not na(tradeLabel) and not na(entryPrice)
@@ -287,5 +287,5 @@ alertcondition(buySig, "🚀 BUY Signal", "Explosive breakout detected!")
 alertcondition(sellSig, "💰 EXIT Signal", "Exit condition triggered!")
 
 // Background coloring
-bgcolor(inTrade ? color.new(color.green, 95) : na, title="In Trade")
-bgcolor(isCompressed ? color.new(color.yellow, 97) : na, title="Compressed (Pre-Breakout)")
+bgcolor(inTrade ? color.new(#00ff08, 0) : na, title="In Trade")
+bgcolor(isCompressed ? color.new(#ffeb3b, 100) : na, title="Compressed (Pre-Breakout)")
