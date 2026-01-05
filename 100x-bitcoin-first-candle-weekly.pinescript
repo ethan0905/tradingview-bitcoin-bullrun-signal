@@ -34,6 +34,12 @@ showSMA20       = input.bool(true, "Afficher SMA 20 (du TF des signaux)")
 useMultiTF      = input.bool(true, "Activer signaux Multi-Timeframe")
 signalTF        = input.timeframe("W", "Timeframe des signaux BUY/SELL (ex: W, D, 240)")
 
+// Crash Detection settings
+showCrashZones  = input.bool(true, "Afficher zones de CRASH violent")
+crashThreshold  = input.float(-15.0, "Seuil de crash % (négatif)", maxval=-5.0, step=1.0)
+crashPeriod     = input.int(5, "Période de crash (barres)", minval=2, maxval=20)
+volumeSpike     = input.float(2.0, "Volume spike multiplier", minval=1.0, step=0.5)
+
 // ━━━━━━━━━━━━━ INDICATORS (chart TF) ━━━━━━━━━━━━━
 rsi = ta.rsi(close, rsiLen)
 atr = ta.atr(14)  // only for visual placement of MACD band
@@ -46,6 +52,28 @@ f_sma20() => ta.sma(close, 20)
 // Request data from higher timeframe (or current TF if MTF disabled)
 rsiMTF = useMultiTF ? request.security(syminfo.tickerid, signalTF, f_rsi()) : rsi
 sma20Display = useMultiTF ? request.security(syminfo.tickerid, signalTF, f_sma20()) : ta.sma(close, 20)
+
+// ━━━━━━━━━━━━━ CRASH DETECTION (Violent Selloff) ━━━━━━━━━━━━━
+// Calculate price drop over crash period
+priceChange = ((close - close[crashPeriod]) / close[crashPeriod]) * 100
+
+// Calculate volume surge
+avgVolume = ta.sma(volume, 50)
+volumeSurge = volume > (avgVolume * volumeSpike)
+
+// Detect violent crash: big price drop + high volume + RSI oversold
+violentCrash = (priceChange <= crashThreshold) and volumeSurge and (rsi < 35)
+
+// Additional confirmation: price below multiple moving averages (bearish structure)
+sma50 = ta.sma(close, 50)
+sma200 = ta.sma(close, 200)
+deepBearish = close < sma50 and close < sma200
+
+// Potential BOTTOM signal: violent crash in deep bear market
+potentialBottom = violentCrash and deepBearish
+
+// Track if we're in a prolonged downtrend (lower lows)
+isLowerLow = ta.lowest(low, 100) == low
 
 // ━━━━━━━━━━━━━ MACD (fixed TF display ONLY) ━━━━━━━━━━━━━
 f_macdLine() =>
@@ -73,6 +101,10 @@ plot(showMACD ? (macdBase + histTF * macdScale)       : na, title="MACD Hist (di
 // Display only the SMA from the selected signal timeframe
 smaColor = useMultiTF ? color.new(color.orange, 0) : color.new(color.purple, 0)
 plot(showSMA20 ? sma20Display : na, title="SMA 20 (Signal TF)", color=smaColor, linewidth=3)
+
+// Plot SMA 50 and 200 for crash detection context
+plot(showCrashZones ? sma50 : na, title="SMA 50", color=color.new(color.blue, 70), linewidth=1)
+plot(showCrashZones ? sma200 : na, title="SMA 200", color=color.new(color.red, 70), linewidth=2)
 
 // ━━━━━━━━━━━━━ MACD MONTHLY (used for SELL condition) ━━━━━━━━━━━━━
 macdHistM = request.security(syminfo.tickerid, "M", f_macdHist())
@@ -137,6 +169,39 @@ if sellSig and showTradeLabels and not na(entryPrice)
     entryPrice := na
     lastBuyTime := na
 
+// ━━━━━━━━━━━━━ CRASH ZONE LABELS ━━━━━━━━━━━━━
+if showCrashZones and potentialBottom
+    crashLabel = "⚠️ VIOLENT CRASH\n" + 
+                 "Drop: " + str.tostring(priceChange, "#.##") + "%\n" + 
+                 "RSI: " + str.tostring(rsi, "#.##") + "\n" + 
+                 "Volume: " + str.tostring(volume/avgVolume, "#.#") + "x avg\n" + 
+                 "⭐ POTENTIAL BOTTOM"
+    label.new(bar_index, high * 1.05, crashLabel, 
+              style=label.style_label_down, 
+              color=color.new(color.red, 20), 
+              textcolor=color.white, 
+              size=size.large)
+
+// Mark violent crashes without bottom confirmation
+if showCrashZones and violentCrash and not deepBearish
+    crashLabel = "💥 CRASH\n" + str.tostring(priceChange, "#.##") + "%\n" + "RSI: " + str.tostring(rsi, "#.##")
+    label.new(bar_index, high * 1.03, crashLabel, 
+              style=label.style_label_down, 
+              color=color.new(color.orange, 30), 
+              textcolor=color.white, 
+              size=size.normal)
+
 // ━━━━━━━━━━━━━ SIGNAL MARKERS ━━━━━━━━━━━━━
 plotshape(buySig,  title="BUY",  style=shape.labelup,   location=location.belowbar, text="BUY",  size=size.tiny)
 plotshape(sellSig, title="SELL", style=shape.labeldown, location=location.abovebar, text="SELL", size=size.tiny)
+
+// Crash markers
+plotshape(showCrashZones and potentialBottom, title="POTENTIAL BOTTOM", 
+          style=shape.xcross, location=location.abovebar, 
+          color=color.new(color.red, 0), size=size.large)
+plotshape(showCrashZones and violentCrash and not deepBearish, title="CRASH", 
+          style=shape.circle, location=location.abovebar, 
+          color=color.new(color.orange, 30), size=size.small)
+
+// Background coloring for extreme crash zones
+bgcolor(showCrashZones and potentialBottom ? color.new(color.red, 90) : na, title="Potential Bottom Zone")
