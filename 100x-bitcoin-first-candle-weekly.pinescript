@@ -1,3 +1,5 @@
+//@creator ethan-safar
+//@date 05/01/2026
 //@version=5
 indicator("BUY 2-step + SELL (>=2y + 1st red MACD Monthly) + MACD display TF", overlay=true, max_labels_count=500)
 

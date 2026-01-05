@@ -1,0 +1,239 @@
+//@creator ethan-safar
+//@date 05/01/2026
+//@version=5
+indicator("100x Explosive Breakout Scalping 5min", overlay=true, max_labels_count=500)
+
+// ━━━━━━━━━━━━━ INPUTS ━━━━━━━━━━━━━
+// Breakout Detection
+bbLength    = input.int(20, "BB Length", minval=10)
+bbMult      = input.float(2.0, "BB Multiplier", minval=1.0, step=0.1)
+compressionThreshold = input.float(2.5, "Compression % (BB squeeze)", minval=1.0, step=0.5)
+
+// Momentum
+rsiLen      = input.int(14, "RSI Length", minval=5)
+rsiBreakout = input.int(55, "RSI Breakout Level", minval=50, maxval=70)
+macdFast    = input.int(12, "MACD Fast", minval=5)
+macdSlow    = input.int(26, "MACD Slow", minval=10)
+macdSig     = input.int(9, "MACD Signal", minval=5)
+
+// Volume
+volumeExplosion = input.float(2.0, "Volume Explosion (x avg)", minval=1.5, step=0.5)
+
+// Risk Management (Aggressive for explosive moves)
+stopLossPct = input.float(1.0, "Stop Loss %", minval=0.5, maxval=2.0, step=0.1)
+takeProfitPct = input.float(8.0, "Take Profit %", minval=3.0, maxval=20.0, step=1.0)
+trailingActivation = input.float(3.0, "Trailing Activation %", minval=2.0, step=0.5)
+trailingDistance = input.float(1.5, "Trailing Distance %", minval=0.5, step=0.5)
+
+// Position
+positionUsd = input.float(10000.0, "Position ($)", minval=100.0, step=100.0)
+leverage    = input.int(100, "Leverage", minval=1, maxval=125)
+
+// Visuals
+showLabels = input.bool(true, "Show Labels")
+showLevels = input.bool(true, "Show Levels")
+
+// ━━━━━━━━━━━━━ INDICATORS ━━━━━━━━━━━━━
+// Bollinger Bands
+[bbMiddle, bbUpper, bbLower] = ta.bb(close, bbLength, bbMult)
+bbWidth = ((bbUpper - bbLower) / bbMiddle) * 100
+
+// RSI
+rsi = ta.rsi(close, rsiLen)
+
+// MACD
+[macdLine, signalLine, macdHist] = ta.macd(close, macdFast, macdSlow, macdSig)
+
+// EMAs
+ema20 = ta.ema(close, 20)
+ema50 = ta.ema(close, 50)
+
+// Volume
+volAvg = ta.sma(volume, 20)
+volExplosive = volume >= (volAvg * volumeExplosion)
+
+// ATR
+atr = ta.atr(14)
+
+// ━━━━━━━━━━━━━ BREAKOUT DETECTION ━━━━━━━━━━━━━
+// 1. Compression phase (BB squeeze) - Volatilité faible = explosion imminente
+isCompressed = bbWidth < compressionThreshold
+
+// 2. Breakout au-dessus de BB middle avec force
+priceBreakout = ta.crossover(close, bbMiddle) or (close > bbMiddle and close[1] <= bbMiddle)
+
+// 3. Volume explosion - Money flowing in
+volumeConfirm = volExplosive
+
+// 4. RSI showing strength but not overbought yet
+rsiStrength = rsi > rsiBreakout and rsi < 75
+
+// 5. MACD momentum turning bullish FAST
+macdMomentum = macdHist > 0 and macdHist > macdHist[1] and macdLine > signalLine
+
+// 6. Price above EMA20 (short-term trend)
+trendOk = close > ema20
+
+// ━━━━━━━━━━━━━ ENTRY SIGNAL (The Explosive Setup) ━━━━━━━━━━━━━
+// Confluence of ALL conditions = HIGH probability explosive move
+buySig = priceBreakout and volumeConfirm and rsiStrength and macdMomentum and trendOk
+
+// Alternative: Catching the rocket mid-flight (less strict)
+buyAggressive = volExplosive and (close > close[1] * 1.005) and macdMomentum and rsiStrength
+
+// ━━━━━━━━━━━━━ TRADE MANAGEMENT (Aggressive for explosions) ━━━━━━━━━━━━━
+var bool inTrade = false
+var float entryPrice = na
+var float stopLoss = na
+var float takeProfit = na
+var float trailingStop = na
+var bool trailingActive = false
+var float highestPrice = na
+
+// ENTRY
+if buySig and not inTrade
+    inTrade := true
+    entryPrice := close
+    stopLoss := close * (1 - stopLossPct / 100)
+    takeProfit := close * (1 + takeProfitPct / 100)
+    trailingStop := na
+    trailingActive := false
+    highestPrice := close
+
+// Update trailing stop during trade
+if inTrade
+    // Track highest price
+    if close > highestPrice
+        highestPrice := close
+    
+    // Activate trailing once we hit activation threshold
+    if not trailingActive and ((highestPrice - entryPrice) / entryPrice * 100) >= trailingActivation
+        trailingActive := true
+    
+    // Update trailing stop
+    if trailingActive
+        trailingStop := highestPrice * (1 - trailingDistance / 100)
+
+// EXIT CONDITIONS
+hitStopLoss = inTrade and (low <= stopLoss)
+hitTakeProfit = inTrade and (high >= takeProfit)
+hitTrailingStop = inTrade and trailingActive and (low <= trailingStop)
+
+// Momentum loss - MACD turning down + RSI extreme
+momentumLoss = inTrade and (macdHist < macdHist[1]) and (rsi > 75)
+
+// SELL
+sellSig = inTrade and (hitStopLoss or hitTakeProfit or hitTrailingStop or momentumLoss)
+
+// Determine exit price and reason
+var string exitReason = ""
+var float exitPrice = na
+
+if sellSig
+    exitPrice := hitStopLoss ? stopLoss : (hitTakeProfit ? takeProfit : (hitTrailingStop ? trailingStop : close))
+    exitReason := hitStopLoss ? "🛑 STOP LOSS" : (hitTakeProfit ? "🎯 TAKE PROFIT" : (hitTrailingStop ? "📈 TRAILING STOP" : "⚠️ MOMENTUM LOSS"))
+    
+    // Reset trade state
+    inTrade := false
+    entryPrice := na
+    stopLoss := na
+    takeProfit := na
+    trailingStop := na
+    trailingActive := false
+    highestPrice := na
+
+// ━━━━━━━━━━━━━ PnL CALCULATION ━━━━━━━━━━━━━
+notionalUsd = positionUsd * leverage
+
+var float pnlUsd = na
+var float pnlPct = na
+var float roiPct = na
+
+if sellSig and not na(entryPrice) and not na(exitPrice)
+    pnlPct := ((exitPrice - entryPrice) / entryPrice) * 100
+    pnlUsd := notionalUsd * pnlPct / 100
+    roiPct := (pnlUsd / positionUsd) * 100
+
+// ━━━━━━━━━━━━━ VISUAL PLOTS ━━━━━━━━━━━━━
+// EMAs
+plot(ema20, "EMA 20", color=color.new(color.blue, 0), linewidth=2)
+plot(ema50, "EMA 50", color=color.new(color.orange, 50), linewidth=1)
+
+// Bollinger Bands
+p1 = plot(bbUpper, "BB Upper", color=color.new(color.purple, 70))
+p2 = plot(bbLower, "BB Lower", color=color.new(color.purple, 70))
+plot(bbMiddle, "BB Middle", color=color.new(color.purple, 80), style=plot.style_circles)
+fill(p1, p2, color=color.new(color.purple, 95), title="BB Fill")
+
+// Trade Levels
+plot(showLevels and inTrade and not na(stopLoss) ? stopLoss : na, 
+     "Stop Loss", color=color.new(color.red, 0), linewidth=3, style=plot.style_linebr)
+plot(showLevels and inTrade and not na(takeProfit) ? takeProfit : na, 
+     "Take Profit", color=color.new(color.green, 0), linewidth=3, style=plot.style_linebr)
+plot(showLevels and inTrade and trailingActive and not na(trailingStop) ? trailingStop : na, 
+     "Trailing Stop", color=color.new(color.yellow, 0), linewidth=2, style=plot.style_linebr)
+
+// ━━━━━━━━━━━━━ LABELS ━━━━━━━━━━━━━
+if buySig and showLabels and not na(stopLoss) and not na(takeProfit)
+    labelText = "� EXPLOSIVE LONG x" + str.tostring(leverage) + "\n" +
+                "━━━━━━━━━━━━━━\n" +
+                "Entry: $" + str.tostring(entryPrice, "#.##") + "\n" +
+                "SL: $" + str.tostring(stopLoss, "#.##") + " (-" + str.tostring(stopLossPct, "#.#") + "%)\n" +
+                "TP: $" + str.tostring(takeProfit, "#.##") + " (+" + str.tostring(takeProfitPct, "#.#") + "%)\n" +
+                "Trailing: " + str.tostring(trailingActivation, "#.#") + "% → -" + str.tostring(trailingDistance, "#.#") + "%\n" +
+                "━━━━━━━━━━━━━━\n" +
+                "RSI: " + str.tostring(rsi, "#.#") + "\n" +
+                "Vol: " + str.tostring(volume/volAvg, "#.#") + "x avg"
+    label.new(bar_index, low * 0.999, labelText, 
+              style=label.style_label_up, 
+              color=color.new(color.green, 0), 
+              textcolor=color.white, 
+              size=size.large,
+              textalign=text.align_left)
+
+if sellSig and showLabels and not na(entryPrice) and not na(exitPrice)
+    labelColor = hitStopLoss ? color.red : color.green
+    emoji = hitStopLoss ? "🛑" : "💰"
+    
+    labelText = emoji + " EXIT: " + exitReason + "\n" +
+                "━━━━━━━━━━━━━━\n" +
+                "Entry: $" + str.tostring(entryPrice, "#.##") + "\n" +
+                "Exit: $" + str.tostring(exitPrice, "#.##") + "\n" +
+                "━━━━━━━━━━━━━━\n" +
+                "PnL: $" + str.tostring(pnlUsd, "#,###.##") + "\n" +
+                "Return: " + str.tostring(pnlPct, "#.##") + "%\n" +
+                "ROI: " + str.tostring(roiPct, "#.##") + "% 💎"
+    label.new(bar_index, high * 1.001, labelText, 
+              style=label.style_label_down, 
+              color=color.new(labelColor, 0), 
+              textcolor=color.white, 
+              size=size.large,
+              textalign=text.align_left)
+
+// ━━━━━━━━━━━━━ VISUAL SIGNALS ━━━━━━━━━━━━━
+// Entry markers
+plotshape(buySig, title="BUY SIGNAL", 
+          style=shape.triangleup, location=location.belowbar, 
+          color=color.new(color.lime, 0), size=size.normal, text="BUY")
+
+// Exit markers
+plotshape(sellSig and hitTakeProfit, title="TAKE PROFIT", 
+          style=shape.flag, location=location.abovebar, 
+          color=color.new(color.green, 0), size=size.normal, text="TP")
+          
+plotshape(sellSig and hitStopLoss, title="STOP LOSS", 
+          style=shape.xcross, location=location.abovebar, 
+          color=color.new(color.red, 0), size=size.normal)
+          
+plotshape(sellSig and hitTrailingStop, title="TRAILING STOP", 
+          style=shape.diamond, location=location.abovebar, 
+          color=color.new(color.yellow, 0), size=size.small, text="TS")
+
+// Alert conditions for compression (pre-breakout alert)
+alertcondition(isCompressed and volExplosive, "⚡ Potential Breakout", "Compression + Volume spike detected!")
+alertcondition(buySig, "🚀 BUY Signal", "Explosive breakout detected!")
+alertcondition(sellSig, "💰 EXIT Signal", "Exit condition triggered!")
+
+// Background coloring
+bgcolor(inTrade ? color.new(color.green, 95) : na, title="In Trade")
+bgcolor(isCompressed ? color.new(color.yellow, 97) : na, title="Compressed (Pre-Breakout)")
