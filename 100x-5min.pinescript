@@ -89,6 +89,7 @@ var float stopLoss = na
 var float fixedTP = na
 var float highestPrice = na
 var int barsInTrade = 0
+var float liqPrice = na
 
 // ENTRY
 if buySig and not inTrade
@@ -98,6 +99,10 @@ if buySig and not inTrade
     fixedTP := useFixedTP ? close * (1 + fixedTPPct / 100) : na
     highestPrice := close
     barsInTrade := 0
+    // Calculate liquidation price for long position
+    // Liq = Entry * (1 - 1/Leverage * (1 - maintenance_margin))
+    // Using 0.5% maintenance margin for simplicity
+    liqPrice := close * (1 - 1 / leverage * (1 - 0.005))
 
 // Update during trade
 if inTrade
@@ -112,6 +117,7 @@ currentProfitPct = inTrade and not na(entryPrice) ? ((close - entryPrice) / entr
 // Basic exits
 hitStopLoss = inTrade and (low <= stopLoss)
 hitFixedTP = inTrade and useFixedTP and not na(fixedTP) and (high >= fixedTP)
+hitLiquidation = inTrade and not na(liqPrice) and (low <= liqPrice)
 
 // ━━━━ MOMENTUM EXIT SIGNALS (the smart part) ━━━━
 // 1. MACD momentum weakening
@@ -136,14 +142,17 @@ rsiOverboughtTurn = (rsi > 70) and (rsi < rsi[1])
 momentumExitSignal = useMomentumExit and (currentProfitPct >= minProfitPct) and (macdWeakening or lostEMA20Support or rsiDivergence or  (volumeDrying and barsInTrade > 3) or strongRedCandle or rsiOverboughtTurn)
 
 // FINAL SELL DECISION
-sellSig = inTrade and (hitStopLoss or hitFixedTP or momentumExitSignal)
+sellSig = inTrade and (hitStopLoss or hitFixedTP or momentumExitSignal or hitLiquidation)
 
 // Determine exit details
 var string exitReason = ""
 var float exitPrice = na
 
 if sellSig
-    if hitStopLoss
+    if hitLiquidation
+        exitPrice := liqPrice
+        exitReason := "💀 LIQUIDATION"
+    else if hitStopLoss
         exitPrice := stopLoss
         exitReason := "🛑 STOP LOSS"
     else if hitFixedTP
@@ -205,33 +214,72 @@ fill(p1, p2, color=color.new(color.purple, 95), title="BB Fill")
 // Trade Levels
 plot(showLevels and inTrade and not na(stopLoss) ? stopLoss : na, 
      "Stop Loss", color=color.new(color.red, 0), linewidth=3, style=plot.style_linebr)
+plot(showLevels and inTrade and not na(liqPrice) ? liqPrice : na, 
+     "Liquidation", color=color.new(color.maroon, 0), linewidth=2, style=plot.style_linebr)
 plot(showLevels and inTrade and useFixedTP and not na(fixedTP) ? fixedTP : na, 
      "Fixed TP", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
 plot(showLevels and inTrade ? entryPrice : na, 
      "Entry", color=color.new(color.white, 50), linewidth=1, style=plot.style_circles)
 
 // ━━━━━━━━━━━━━ LABELS ━━━━━━━━━━━━━
-if buySig and showLabels and not na(stopLoss)
-    tpText = useFixedTP and not na(fixedTP) ? ("TP: $" + str.tostring(fixedTP, "#.##") + " (+" + str.tostring(fixedTPPct, "#.#") + "%)") : "EXIT: SMART MOMENTUM 🧠"
-    
-    labelText = "🚀 EXPLOSIVE LONG x" + str.tostring(leverage) + "\n" +"━━━━━━━━━━━━━━\n" +"Entry: $" + str.tostring(entryPrice, "#.##") + "\n" +"SL: $" + str.tostring(stopLoss, "#.##") + " (-" + str.tostring(stopLossPct, "#.#") + "%)\n" +tpText + "\n" +"━━━━━━━━━━━━━━\n" +"Conditions:\n" +"✓ BB Breakout + Volume " + str.tostring(volume/volAvg, "#.#") + "x\n" +"✓ RSI: " + str.tostring(rsi, "#.#") + " | MACD+\n" +"✓ Price > EMA20"
-    label.new(bar_index, low * 0.999, labelText, style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white, size=size.large,textalign=text.align_left)
+// Create/update label for current or completed trade
+var label tradeLabel = na
 
-if sellSig and showLabels and not na(entryPrice) and not na(exitPrice)
-    labelColor = hitStopLoss ? color.red : color.green
-    emoji = hitStopLoss ? "🛑" : "💰"
+if buySig and showLabels and not na(stopLoss)
+    // Create new label on entry
+    labelText = "🚀 LONG x" + str.tostring(leverage) + "\n" + "━━━━━━━━━━━━━━\n" + "Entry: $" + str.tostring(entryPrice, "#.##") + "\n" + "Stop: $" + str.tostring(stopLoss, "#.##") + "\n" + "Liq: $" + str.tostring(liqPrice, "#.##") + "\n" + "Exit: PENDING\n" + "━━━━━━━━━━━━━━\n" + "PnL: $0.00\n" + "Status: IN TRADE"
     
-    labelText = emoji + " EXIT: " + exitReason + "\n" +"━━━━━━━━━━━━━━\n" +"Entry: $" + str.tostring(entryPrice, "#.##") + "\n" +"Exit: $" + str.tostring(exitPrice, "#.##") + "\n" +"━━━━━━━━━━━━━━\n" +"PnL: $" + str.tostring(pnlUsd, "#,###.##") + "\n" +"Return: " + str.tostring(pnlPct, "#.##") + "%\n" +"ROI: " + str.tostring(roiPct, "#.##") + "% 💎"
-    label.new(bar_index, high * 1.001, labelText, style=label.style_label_down, color=color.new(labelColor, 0), textcolor=color.white, size=size.large,textalign=text.align_left)
+    tradeLabel := label.new(bar_index, low * 0.999, labelText, style=label.style_label_up, color=color.new(color.blue, 0), textcolor=color.white, size=size.normal,textalign=text.align_left)
+
+// Update label while in trade (show current unrealized PnL)
+if inTrade and not na(tradeLabel) and not na(entryPrice)
+    unrealizedPnl = notionalUsd * ((close - entryPrice) / entryPrice)
+    
+    labelText = "🚀 LONG x" + str.tostring(leverage) + "\n" + "━━━━━━━━━━━━━━\n" + "Entry: $" + str.tostring(entryPrice, "#.##") + "\n" + "Stop: $" + str.tostring(stopLoss, "#.##") + "\n" + "Liq: $" + str.tostring(liqPrice, "#.##") + "\n" + "Current: $" + str.tostring(close, "#.##") + "\n" + "━━━━━━━━━━━━━━\n" + "PnL: $" + str.tostring(unrealizedPnl, "#,###.##") + "\n" + "Status: IN TRADE"
+    
+    label.set_text(tradeLabel, labelText)
+    label.set_x(tradeLabel, bar_index)
+    label.set_y(tradeLabel, low * 0.999)
+
+// Final update on exit
+if sellSig and not na(tradeLabel) and not na(entryPrice) and not na(exitPrice)
+    // Determine if win, lose, or liquidation
+    isLiquidated = hitLiquidation
+    isWin = pnlUsd > 0
+    
+    var string resultText = ""
+    var color labelColor = color.blue
+    
+    if isLiquidated
+        resultText := "💀 LIQUIDATED"
+        labelColor := color.maroon
+    else if isWin
+        resultText := "✅ WIN"
+        labelColor := color.green
+    else
+        resultText := "❌ LOSE"
+        labelColor := color.red
+    
+    labelText = "🚀 LONG x" + str.tostring(leverage) + "\n" + "━━━━━━━━━━━━━━\n" + "Entry: $" + str.tostring(entryPrice, "#.##") + "\n" + "Stop: $" + str.tostring(stopLoss, "#.##") + "\n" + "Liq: $" + str.tostring(liqPrice, "#.##") + "\n" + "Exit: $" + str.tostring(exitPrice, "#.##") + "\n" + "━━━━━━━━━━━━━━\n" + "PnL: $" + str.tostring(pnlUsd, "#,###.##") + "\n" + "Status: " + resultText
+    
+    label.set_text(tradeLabel, labelText)
+    label.set_color(tradeLabel, color.new(labelColor, 0))
+    label.set_x(tradeLabel, bar_index)
+    label.set_y(tradeLabel, low * 0.999)
+    
+    // Reset for next trade
+    tradeLabel := na
 
 // ━━━━━━━━━━━━━ VISUAL SIGNALS ━━━━━━━━━━━━━
 // Entry markers
 plotshape(buySig, title="BUY SIGNAL", style=shape.triangleup, location=location.belowbar, color=color.new(color.lime, 0), size=size.normal, text="BUY")
 
 // Exit markers
-plotshape(sellSig and not hitStopLoss, title="MOMENTUM EXIT", style=shape.flag, location=location.abovebar, color=color.new(color.green, 0), size=size.normal, text="EXIT")
+plotshape(sellSig and not hitStopLoss and not hitLiquidation, title="MOMENTUM EXIT", style=shape.flag, location=location.abovebar, color=color.new(color.green, 0), size=size.normal, text="EXIT")
           
-plotshape(sellSig and hitStopLoss, title="STOP LOSS", style=shape.xcross, location=location.abovebar, color=color.new(color.red, 0), size=size.normal, text="SL")
+plotshape(sellSig and hitStopLoss and not hitLiquidation, title="STOP LOSS", style=shape.xcross, location=location.abovebar, color=color.new(color.red, 0), size=size.normal, text="SL")
+
+plotshape(sellSig and hitLiquidation, title="LIQUIDATION", style=shape.xcross, location=location.abovebar, color=color.new(color.maroon, 0), size=size.large, text="LIQ")
 
 // Alert conditions for compression (pre-breakout alert)
 alertcondition(isCompressed and volExplosive, "⚡ Potential Breakout", "Compression + Volume spike detected!")
