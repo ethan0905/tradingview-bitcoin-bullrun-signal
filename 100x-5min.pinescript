@@ -287,5 +287,70 @@ alertcondition(buySig, "🚀 BUY Signal", "Explosive breakout detected!")
 alertcondition(sellSig, "💰 EXIT Signal", "Exit condition triggered!")
 
 // Background coloring
-bgcolor(inTrade ? color.new(#00ff08, 0) : na, title="In Trade")
-bgcolor(isCompressed ? color.new(#ffeb3b, 100) : na, title="Compressed (Pre-Breakout)")
+bgcolor(isCompressed ? color.new(#ffeb3b, 97) : na, title="Compressed (Pre-Breakout)")
+
+// ━━━━━━━━━━━━━ DYNAMIC R:R TRADE ZONES ━━━━━━━━━━━━━
+// Visual representation of risk (red) vs reward (green)
+var box dangerZone = na
+var box profitZone = na
+
+// Create zones on entry (after entry variables are set)
+if buySig and showLevels and not na(stopLoss) and not na(liqPrice) and not na(entryPrice)
+    
+    // DANGER ZONE: Stop Loss (top) to Liquidation (bottom)
+    dangerZone := box.new(
+        left=bar_index, 
+        top=stopLoss, 
+        right=bar_index + 1, 
+        bottom=liqPrice,
+        border_color=color.new(color.red, 0),
+        bgcolor=color.new(color.red, 85),
+        border_width=2,
+        text="⚠️ DANGER ZONE\n(SL → LIQ)",
+        text_color=color.new(color.red, 0),
+        text_size=size.small,
+        text_halign=text.align_right,
+        text_valign=text.align_bottom
+    )
+    
+    // PROFIT ZONE: Entry (bottom) to Target (top)
+    initialTarget = useFixedTP and not na(fixedTP) ? fixedTP : entryPrice * 1.01
+    profitZone := box.new(
+        left=bar_index, 
+        top=initialTarget, 
+        right=bar_index + 1, 
+        bottom=entryPrice,
+        border_color=color.new(color.green, 0),
+        bgcolor=color.new(color.green, 90),
+        border_width=2,
+        text="🎯 PROFIT ZONE\n(Entry → Exit)",
+        text_color=color.new(color.green, 0),
+        text_size=size.small,
+        text_halign=text.align_right,
+        text_valign=text.align_top
+    )
+
+// Update zones while in trade (extend right side and update profit zone top)
+if inTrade and showLevels and not na(dangerZone) and not na(profitZone)
+    // Extend danger zone to current bar
+    box.set_right(dangerZone, bar_index)
+    
+    // Extend and update profit zone
+    targetLevel = useFixedTP and not na(fixedTP) ? fixedTP : math.max(highestPrice, close)
+    box.set_right(profitZone, bar_index)
+    box.set_top(profitZone, targetLevel)
+
+// Finalize on exit
+if sellSig
+    // Finalize the boxes at exit bar
+    if not na(dangerZone)
+        box.set_right(dangerZone, bar_index)
+    if not na(profitZone)
+        box.set_right(profitZone, bar_index)
+        // Set final exit level
+        if not na(exitPrice)
+            box.set_top(profitZone, exitPrice)
+    
+    // Reset references for next trade
+    dangerZone := na
+    profitZone := na
