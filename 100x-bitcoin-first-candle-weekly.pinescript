@@ -111,9 +111,7 @@ plot(showMACD ? (macdBase + histTF * macdScale)       : na, title="MACD Hist (di
 smaColor = useMultiTF ? color.new(color.orange, 0) : color.new(color.purple, 0)
 plot(showSMA20 ? sma20Display : na, title="SMA 20 (Signal TF)", color=smaColor, linewidth=3)
 
-// Plot SMA 50 and 200 for crash detection context
-plot(showCrashZones ? sma50 : na, title="SMA 50", color=color.new(color.blue, 70), linewidth=1)
-plot(showCrashZones ? sma200 : na, title="SMA 200", color=color.new(color.red, 70), linewidth=2)
+// SMA 50 and 200 are used for crash detection but not displayed (kept for calculation only)
 
 // ━━━━━━━━━━━━━ MACD MONTHLY (used for SELL condition) ━━━━━━━━━━━━━
 macdHistM = request.security(syminfo.tickerid, "M", f_macdHist())
