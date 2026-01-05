@@ -297,20 +297,21 @@ var box profitZone = na
 // Create zones on entry (after entry variables are set)
 if buySig and showLevels and not na(stopLoss) and not na(liqPrice) and not na(entryPrice)
     
-    // DANGER ZONE: Stop Loss (top) to Liquidation (bottom)
+    // DANGER ZONE: Entry (top) to Liquidation (bottom)
+    // This shows the risk area below entry price
     dangerZone := box.new(
         left=bar_index, 
-        top=stopLoss, 
+        top=entryPrice, 
         right=bar_index + 1, 
         bottom=liqPrice,
         border_color=color.new(color.red, 0),
         bgcolor=color.new(color.red, 85),
         border_width=2,
-        text="⚠️ DANGER ZONE\n(SL → LIQ)",
+        text="⚠️ DANGER ZONE\n(Entry → LIQ)",
         text_color=color.new(color.red, 0),
         text_size=size.small,
         text_halign=text.align_right,
-        text_valign=text.align_bottom
+        text_valign=text.align_top
     )
     
     // PROFIT ZONE: Entry (bottom) to Target (top)
