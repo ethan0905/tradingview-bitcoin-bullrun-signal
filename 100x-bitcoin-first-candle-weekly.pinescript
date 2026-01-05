@@ -30,12 +30,26 @@ macdScale       = input.float(0.02, "MACD visual scale", step=0.005)
 // Additional indicators
 showSMA20       = input.bool(true, "Afficher SMA 20")
 
+// Multi-Timeframe settings
+useMultiTF      = input.bool(true, "Activer signaux Multi-Timeframe")
+signalTF        = input.timeframe("W", "Timeframe des signaux BUY/SELL (ex: W, D, 240)")
+showSMA20_MTF   = input.bool(true, "Afficher SMA 20 du TF des signaux")
+
 // ━━━━━━━━━━━━━ INDICATORS (chart TF) ━━━━━━━━━━━━━
 rsi = ta.rsi(close, rsiLen)
 atr = ta.atr(14)  // only for visual placement of MACD band
 
 // SMA 20
 sma20 = ta.sma(close, 20)
+
+// ━━━━━━━━━━━━━ MULTI-TIMEFRAME INDICATORS ━━━━━━━━━━━━━
+// Functions for MTF data
+f_rsi() => ta.rsi(close, rsiLen)
+f_sma20() => ta.sma(close, 20)
+
+// Request data from higher timeframe
+rsiMTF = useMultiTF ? request.security(syminfo.tickerid, signalTF, f_rsi()) : rsi
+sma20MTF = useMultiTF ? request.security(syminfo.tickerid, signalTF, f_sma20()) : sma20
 
 // ━━━━━━━━━━━━━ MACD (fixed TF display ONLY) ━━━━━━━━━━━━━
 f_macdLine() =>
@@ -60,7 +74,8 @@ plot(showMACD ? (macdBase + histTF * macdScale)       : na, title="MACD Hist (di
      color=(histTF >= 0 ? color.new(color.green, 30) : color.new(color.red, 30)))
 
 // ━━━━━━━━━━━━━ SMA 20 DISPLAY ━━━━━━━━━━━━━
-plot(showSMA20 ? sma20 : na, title="SMA 20", color=color.new(color.purple, 0), linewidth=2)
+plot(showSMA20 ? sma20 : na, title="SMA 20 (Chart TF)", color=color.new(color.purple, 0), linewidth=2)
+plot(showSMA20_MTF and useMultiTF ? sma20MTF : na, title="SMA 20 (Signal TF)", color=color.new(color.orange, 0), linewidth=3, style=plot.style_line)
 
 // ━━━━━━━━━━━━━ MACD MONTHLY (used for SELL condition) ━━━━━━━━━━━━━
 macdHistM = request.security(syminfo.tickerid, "M", f_macdHist())
@@ -77,7 +92,10 @@ var int  armedBuyAt = na
 var int   lastBuyTime = na
 var float entryPrice  = na
 
-armBuyCond = (not inTrade) and (rsi <= armLvl)
+// Use MTF RSI for signals if enabled, otherwise use chart TF
+rsiForSignals = useMultiTF ? rsiMTF : rsi
+
+armBuyCond = (not inTrade) and (rsiForSignals <= armLvl)
 if armBuyCond
     armedBuy := true
     armedBuyAt := bar_index
@@ -86,7 +104,7 @@ if armedBuy and not na(armedBuyAt) and (bar_index - armedBuyAt > buyExpiry)
     armedBuy := false
     armedBuyAt := na
 
-buySig = (not inTrade) and armedBuy and ta.crossover(rsi, buyConfirm)
+buySig = (not inTrade) and armedBuy and ta.crossover(rsiForSignals, buyConfirm)
 if buySig
     inTrade := true
     armedBuy := false
@@ -111,12 +129,14 @@ f_liq_long(e, l, b) => e * (1 - 1 / l) * (1 - b)
 
 if buySig and showTradeLabels
     liq = f_liq_long(close, leverage, maintBuf)
-    label.new(bar_index, low,"BUY\nEntry: " + str.tostring(close, "#.##") +"\nLiq x" + str.tostring(leverage) + ": " + str.tostring(liq, "#.##") +"\nMACD Monthly hist: " + str.tostring(macdHistM, "#.####"),style=label.style_label_up,color=color.new(color.green, 0),textcolor=color.white)
+    tfLabel = useMultiTF ? " [" + signalTF + "]" : ""
+    label.new(bar_index, low,"BUY" + tfLabel + "\nEntry: " + str.tostring(close, "#.##") +"\nLiq x" + str.tostring(leverage) + ": " + str.tostring(liq, "#.##") +"\nRSI: " + str.tostring(rsiForSignals, "#.##") +"\nMACD Monthly hist: " + str.tostring(macdHistM, "#.####"),style=label.style_label_up,color=color.new(color.green, 0),textcolor=color.white)
 
 if sellSig and showTradeLabels and not na(entryPrice)
     pnlUsd = notionalUsd * (close - entryPrice) / entryPrice
     roiPct = pnlUsd / positionUsd * 100.0
-    label.new(bar_index, high,"SELL (Rule: 2y + 1st red MACD M)\nExit: " + str.tostring(close, "#.##") +"\nPnL: $" + str.tostring(pnlUsd, "#.##") +"\nROI: " + str.tostring(roiPct, "#.##") + "%" +"\nMACD Monthly hist: " + str.tostring(macdHistM, "#.####"),style=label.style_label_down,color=color.new(color.red, 0),textcolor=color.white)
+    tfLabel = useMultiTF ? " [" + signalTF + "]" : ""
+    label.new(bar_index, high,"SELL" + tfLabel + " (Rule: 2y + 1st red MACD M)\nExit: " + str.tostring(close, "#.##") +"\nPnL: $" + str.tostring(pnlUsd, "#.##") +"\nROI: " + str.tostring(roiPct, "#.##") + "%" +"\nMACD Monthly hist: " + str.tostring(macdHistM, "#.####"),style=label.style_label_down,color=color.new(color.red, 0),textcolor=color.white)
     entryPrice := na
     lastBuyTime := na
 
