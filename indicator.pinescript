@@ -1,0 +1,136 @@
+//@version=5
+strategy("Low-Freq Oversold Memory Strategy + Trade Boxes + Liq (Approx)",
+     overlay=true,
+     initial_capital=10000,
+     commission_type=strategy.commission.percent,
+     commission_value=0.05,
+     pyramiding=0,
+     calc_on_order_fills=true,
+     calc_on_every_tick=false)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trend context (optional)
+useTrendFilter = input.bool(true, "Filtre de tendance (plus rare, plus propre)")
+emaLen = input.int(200, "EMA tendance", minval=1)
+emaT = ta.ema(close, emaLen)
+plot(emaT, "EMA Tendance", linewidth=2)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Oversold memory + RSI
+rsiLen = input.int(14, "RSI length", minval=2)
+rsi = ta.rsi(close, rsiLen)
+
+oversoldLvl = input.int(28, "Zone survente (RSI <)", minval=1, maxval=50)
+rsiLowNow   = input.int(35, "RSI bas actuel (RSI <=)", minval=1, maxval=60)
+confirmLvl  = input.int(40, "Confirmation (RSI remonte au-dessus de)", minval=1, maxval=80)
+
+memoryBars  = input.int(60, "Mémoire survente (N bougies)", minval=1)
+
+// “Il y a eu une vraie survente récemment”
+hadOversoldRecently = ta.lowest(rsi, memoryBars) < oversoldLvl
+isLowNow            = rsi <= rsiLowNow
+confirmedBounce     = ta.crossover(rsi, confirmLvl)
+
+// Trend filter (pour réduire la fréquence et augmenter “propreté”)
+trendOk = not useTrendFilter or close > emaT
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Risk management: ATR stop + RR take profit + optional RSI exit
+atrLen = input.int(14, "ATR length", minval=1)
+atr = ta.atr(atrLen)
+
+atrStopMult = input.float(2.0, "Stop = ATR x", step=0.1)
+rr          = input.float(1.5, "Take Profit RR", step=0.1)
+
+useRsiExit  = input.bool(true, "Sortie si RSI retombe (sécurité)")
+rsiExitLvl  = input.int(45, "RSI exit si passe sous", minval=1, maxval=99)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Entry condition (rare + propre)
+longSignal = trendOk and hadOversoldRecently and isLowNow and confirmedBounce
+
+// We compute theoretical levels at entry
+var float entryPrice = na
+var float stopPrice  = na
+var float takePrice  = na
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Liquidation (approx) for a LONG
+// Very simplified: liq ≈ entry * (1 - 1/leverage) minus maintenance buffer
+showLiq = input.bool(true, "Afficher liquidation (approx)")
+leverage = input.float(3.0, "Levier (approx)", minval=1.0, step=0.1)
+maintBuf = input.float(0.01, "Maintenance buffer (1% = 0.01)", minval=0.0, step=0.001)
+
+f_liq_long(_entry, _lev, _buf) =>
+    // If lev=1 -> liquidation not meaningful, return na
+    _lev <= 1 ? na : _entry * (1 - 1/_lev) * (1 - _buf)
+
+var float liqPrice = na
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trade box drawing
+var box   tradeBox = na
+var line  liqLine  = na
+var label liqLabel = na
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Execute entry
+if (longSignal and strategy.position_size == 0)
+    strategy.entry("LONG", strategy.long)
+
+    entryPrice := close
+    stopPrice  := entryPrice - atr * atrStopMult
+    takePrice  := entryPrice + (entryPrice - stopPrice) * rr
+    liqPrice   := showLiq ? f_liq_long(entryPrice, leverage, maintBuf) : na
+
+    // Create a neutral box initially (we color it when trade closes)
+    tradeBox := box.new(left=bar_index, top=takePrice, right=bar_index, bottom=stopPrice, extend=extend.none)
+
+    // Liquidation visual
+    if showLiq and not na(liqPrice)
+        liqLine  := line.new(bar_index, liqPrice, bar_index + 1, liqPrice, extend=extend.right)
+        liqLabel := label.new(bar_index, liqPrice, "Liq (approx)", style=label.style_label_left, textcolor=color.white)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Always keep exit orders updated while in position
+inPos = strategy.position_size > 0
+
+if inPos and not na(entryPrice)
+    // Attach SL/TP
+    strategy.exit("EXIT", "LONG", stop=stopPrice, limit=takePrice)
+
+    // Optional RSI safety exit
+    if useRsiExit and ta.crossunder(rsi, rsiExitLvl)
+        strategy.close("LONG", comment="RSI Exit")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Update box right edge while trade is active
+if inPos and not na(tradeBox)
+    box.set_right(tradeBox, bar_index)
+    // keep the box levels stable (entry-defined)
+    box.set_top(tradeBox, takePrice)
+    box.set_bottom(tradeBox, stopPrice)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// When position closes: color the box green/red based on result
+justClosed = strategy.position_size == 0 and strategy.position_size[1] > 0
+
+if justClosed and not na(tradeBox)
+    // Approx result by comparing last close to entry (simple proxy)
+    // Better: use strategy.closedtrades, but not always available in older contexts
+    win = close >= entryPrice
+    box.set_bgcolor(tradeBox, win ? color.new(color.green, 85) : color.new(color.red, 85))
+    box.set_border_color(tradeBox, win ? color.new(color.green, 0) : color.new(color.red, 0))
+
+    // Reset for next trade
+    entryPrice := na
+    stopPrice  := na
+    takePrice  := na
+    liqPrice   := na
+    tradeBox   := na
+    liqLine    := na
+    liqLabel   := na
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Debug plots (optional)
+plot(rsi, "RSI", display=display.none)
