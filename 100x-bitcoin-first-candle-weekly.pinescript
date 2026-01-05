@@ -179,7 +179,15 @@ if sellSig and showTradeLabels and not na(entryPrice)
     lastBuyTime := na
 
 // ━━━━━━━━━━━━━ CRASH ZONE LABELS ━━━━━━━━━━━━━
-if showCrashZones and potentialBottom
+// Track previous crash states to avoid duplicate labels
+var bool prevPotentialBottom = false
+var bool prevViolentCrash = false
+
+// Only create label on new crash detection (not on every bar update)
+newPotentialBottom = potentialBottom and not prevPotentialBottom
+newViolentCrash = violentCrash and not deepBearish and not prevViolentCrash and not potentialBottom
+
+if showCrashZones and newPotentialBottom
     tfLabel = useMultiTF ? " [" + signalTF + "]" : ""
     crashLabel = "⚠️ Violent crash" + tfLabel + "\n" + 
                  "Drop: " + str.tostring(priceChange, "#.##") + "%\n" + 
@@ -193,7 +201,7 @@ if showCrashZones and potentialBottom
               size=size.large)
 
 // Mark violent crashes without bottom confirmation
-if showCrashZones and violentCrash and not deepBearish
+if showCrashZones and newViolentCrash
     tfLabel = useMultiTF ? " [" + signalTF + "]" : ""
     crashLabel = "💥 CRASH" + tfLabel + "\n" + str.tostring(priceChange, "#.##") + "%\n" + "RSI: " + str.tostring(rsiForCrash, "#.##")
     label.new(bar_index, high * 1.03, crashLabel, 
@@ -202,15 +210,19 @@ if showCrashZones and violentCrash and not deepBearish
               textcolor=color.white, 
               size=size.normal)
 
+// Update previous states
+prevPotentialBottom := potentialBottom
+prevViolentCrash := violentCrash and not deepBearish
+
 // ━━━━━━━━━━━━━ SIGNAL MARKERS ━━━━━━━━━━━━━
 plotshape(buySig,  title="BUY",  style=shape.labelup,   location=location.belowbar, text="BUY",  size=size.tiny)
 plotshape(sellSig, title="SELL", style=shape.labeldown, location=location.abovebar, text="SELL", size=size.tiny)
 
-// Crash markers
-plotshape(showCrashZones and potentialBottom, title="POTENTIAL BOTTOM", 
+// Crash markers - only on new crash detection to avoid duplicates
+plotshape(showCrashZones and newPotentialBottom, title="POTENTIAL BOTTOM", 
           style=shape.xcross, location=location.abovebar, 
           color=color.new(color.red, 0), size=size.large)
-plotshape(showCrashZones and violentCrash and not deepBearish, title="CRASH", 
+plotshape(showCrashZones and newViolentCrash, title="CRASH", 
           style=shape.circle, location=location.abovebar, 
           color=color.new(color.orange, 30), size=size.small)
 
