@@ -28,28 +28,24 @@ macdTF          = input.timeframe("M", "MACD Timeframe affichage (ex: M, W, D, 2
 macdScale       = input.float(0.02, "MACD visual scale", step=0.005)
 
 // Additional indicators
-showSMA20       = input.bool(true, "Afficher SMA 20")
+showSMA20       = input.bool(true, "Afficher SMA 20 (du TF des signaux)")
 
 // Multi-Timeframe settings
 useMultiTF      = input.bool(true, "Activer signaux Multi-Timeframe")
 signalTF        = input.timeframe("W", "Timeframe des signaux BUY/SELL (ex: W, D, 240)")
-showSMA20_MTF   = input.bool(true, "Afficher SMA 20 du TF des signaux")
 
 // ━━━━━━━━━━━━━ INDICATORS (chart TF) ━━━━━━━━━━━━━
 rsi = ta.rsi(close, rsiLen)
 atr = ta.atr(14)  // only for visual placement of MACD band
-
-// SMA 20
-sma20 = ta.sma(close, 20)
 
 // ━━━━━━━━━━━━━ MULTI-TIMEFRAME INDICATORS ━━━━━━━━━━━━━
 // Functions for MTF data
 f_rsi() => ta.rsi(close, rsiLen)
 f_sma20() => ta.sma(close, 20)
 
-// Request data from higher timeframe
+// Request data from higher timeframe (or current TF if MTF disabled)
 rsiMTF = useMultiTF ? request.security(syminfo.tickerid, signalTF, f_rsi()) : rsi
-sma20MTF = useMultiTF ? request.security(syminfo.tickerid, signalTF, f_sma20()) : sma20
+sma20Display = useMultiTF ? request.security(syminfo.tickerid, signalTF, f_sma20()) : ta.sma(close, 20)
 
 // ━━━━━━━━━━━━━ MACD (fixed TF display ONLY) ━━━━━━━━━━━━━
 f_macdLine() =>
@@ -74,8 +70,9 @@ plot(showMACD ? (macdBase + histTF * macdScale)       : na, title="MACD Hist (di
      color=(histTF >= 0 ? color.new(color.green, 30) : color.new(color.red, 30)))
 
 // ━━━━━━━━━━━━━ SMA 20 DISPLAY ━━━━━━━━━━━━━
-plot(showSMA20 ? sma20 : na, title="SMA 20 (Chart TF)", color=color.new(color.purple, 0), linewidth=2)
-plot(showSMA20_MTF and useMultiTF ? sma20MTF : na, title="SMA 20 (Signal TF)", color=color.new(color.orange, 0), linewidth=3, style=plot.style_line)
+// Display only the SMA from the selected signal timeframe
+smaColor = useMultiTF ? color.new(color.orange, 0) : color.new(color.purple, 0)
+plot(showSMA20 ? sma20Display : na, title="SMA 20 (Signal TF)", color=smaColor, linewidth=3)
 
 // ━━━━━━━━━━━━━ MACD MONTHLY (used for SELL condition) ━━━━━━━━━━━━━
 macdHistM = request.security(syminfo.tickerid, "M", f_macdHist())
