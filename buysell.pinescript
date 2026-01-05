@@ -1,52 +1,54 @@
 //@version=5
-indicator("BTC 5m Alternating BUY/SELL — SELL Score (A+C+D)", overlay=true, max_labels_count=500)
+indicator("4H Alternating BUY/SELL — SELL Score (A+C+D) + Liq x100 + PnL$", overlay=true, max_labels_count=500)
 
 // ━━━━━━━━━━━━━ INPUTS ━━━━━━━━━━━━━
 // BUY (simple 2-step oversold bounce)
 rsiLen     = input.int(14, "RSI length", minval=2)
 armLvl     = input.int(30, "BUY Arm (RSI <=)", minval=1, maxval=60)
 buyConfirm = input.int(42, "BUY Confirm (RSI cross >)", minval=1, maxval=80)
-buyExpiry  = input.int(60, "BUY Arm Expiry (bars)", minval=5)
+buyExpiry  = input.int(200, "BUY Arm Expiry (bars)", minval=5)  // en 4H tu peux laisser plus large
 
 // SELL score threshold
 sellScoreThresh = input.int(3, "SELL score threshold (1-5)", minval=1, maxval=5)
 
 // A) Momentum fade
-rsiFadeLvl = input.int(55, "A: RSI fade level (crossunder)", minval=1, maxval=99)
-macdFast   = input.int(12, "MACD fast", minval=1)
-macdSlow   = input.int(26, "MACD slow", minval=1)
-macdSig    = input.int(9,  "MACD signal", minval=1)
+rsiFadeLvl  = input.int(55, "A: RSI fade level (crossunder)", minval=1, maxval=99)
+macdFast    = input.int(12, "MACD fast", minval=1)
+macdSlow    = input.int(26, "MACD slow", minval=1)
+macdSig     = input.int(9,  "MACD signal", minval=1)
 histDecBars = input.int(2, "A: MACD hist decreasing bars", minval=1, maxval=5)
 
 // C) Break structure (swing low)
-pivotL = input.int(2, "C: Pivot left", minval=1, maxval=10)
-pivotR = input.int(2, "C: Pivot right", minval=1, maxval=10)
+pivotL = input.int(3, "C: Pivot left", minval=1, maxval=20)
+pivotR = input.int(3, "C: Pivot right", minval=1, maxval=20)
 requireBreakClose = input.bool(true, "C: Require close below swing low (vs wick)")
 
 // D) Trailing / volatility (Chandelier ATR)
-atrLen       = input.int(14, "ATR length", minval=1)
+atrLen        = input.int(14, "ATR length", minval=1)
 trailLookback = input.int(18, "D: Chandelier lookback", minval=1)
 trailATRmult  = input.float(2.6, "D: Chandelier ATR x", step=0.1)
 
-// Visual / debug
-showScoreLabel = input.bool(false, "Show SELL score label (debug)")
+// Liquidation + PnL settings
+leverage  = input.int(100, "Leverage", minval=1)                 // demandé x100
+maintBuf  = input.float(0.005, "Maintenance buffer (0.5% = 0.005)", minval=0.0, step=0.001)
+marginUsd = input.float(100.0, "Margin used per trade ($)", minval=1.0, step=1.0) // pour calcul PnL$
+
+showTradeLabels = input.bool(true, "Afficher labels trade (BUY/SELL + liq + pnl)")
+showScoreLabel  = input.bool(false, "Afficher SELL score (debug)")
 
 // ━━━━━━━━━━━━━ INDICATORS ━━━━━━━━━━━━━
 rsi = ta.rsi(close, rsiLen)
 [macdLine, signalLine, hist] = ta.macd(close, macdFast, macdSlow, macdSig)
 atr = ta.atr(atrLen)
 
-// A) Momentum fade components
+// A) Momentum fade
 rsiFade = ta.crossunder(rsi, rsiFadeLvl)
-
-// MACD histogram decreasing for N bars (hist[0] < hist[1] < hist[2]...)
 histDec = true
 for i = 0 to histDecBars - 1
     histDec := histDec and (hist[i] < hist[i + 1])
-
 momFadeOK = rsiFade or (hist > 0 and histDec)
 
-// C) Break structure components
+// C) Break structure (swing low)
 pLow = ta.pivotlow(low, pivotL, pivotR)
 var float lastSwingLow = na
 if not na(pLow)
@@ -56,13 +58,24 @@ breakStruct = false
 if not na(lastSwingLow)
     breakStruct := requireBreakClose ? (close < lastSwingLow) : (low < lastSwingLow)
 
-// D) Trailing / volatility components (Chandelier stop for longs)
+// D) Trailing break (Chandelier)
 chandelierStop = ta.highest(high, trailLookback) - atr * trailATRmult
 trailBreak = ta.crossunder(close, chandelierStop)
 
+// Extra momentum-based “quality points”
+obLookback = 100
+overboughtRecently = ta.highest(rsi, obLookback) >= 70
+scoreOB = overboughtRecently ? 1 : 0
+scoreHistNeg = (hist < 0) ? 1 : 0
+
+// Score A+C+D (+ bonus OB + histNeg)
+scoreA = momFadeOK ? 1 : 0
+scoreC = breakStruct ? 1 : 0
+scoreD = trailBreak ? 1 : 0
+sellScore = scoreA + scoreC + scoreD + scoreOB + scoreHistNeg
+
 // ━━━━━━━━━━━━━ BUY STATE MACHINE (2-step) ━━━━━━━━━━━━━
 var bool inTrade = false
-
 var bool armedBuy = false
 var int  armedBuyAt = na
 
@@ -76,39 +89,53 @@ if armedBuy and not na(armedBuyAt) and (bar_index - armedBuyAt > buyExpiry)
     armedBuyAt := na
 
 buySig = (not inTrade) and armedBuy and ta.crossover(rsi, buyConfirm)
-
 if buySig
     inTrade := true
     armedBuy := false
     armedBuyAt := na
 
-// ━━━━━━━━━━━━━ SELL SCORE (A + C + D) ━━━━━━━━━━━━━
-// Score components (0/1 each)
-scoreA = momFadeOK ? 1 : 0
-scoreC = breakStruct ? 1 : 0
-scoreD = trailBreak ? 1 : 0
-
-// Extra safety points (optional, but still momentum-based)
-//  - RSI was overbought recently (helps “sell only after it ran”)
-obLookback = 60
-overboughtRecently = ta.highest(rsi, obLookback) >= 70
-scoreOB = overboughtRecently ? 1 : 0
-
-//  - MACD already negative (trend down in momentum)
-scoreHistNeg = (hist < 0) ? 1 : 0
-
-// Total score (0..5)
-sellScore = scoreA + scoreC + scoreD + scoreOB + scoreHistNeg
-
+// SELL signal when inTrade + score threshold
 sellSig = inTrade and (sellScore >= sellScoreThresh)
-
-// Ensure SELL is only 1 time (alternating)
 if sellSig
     inTrade := false
 
-// ━━━━━━━━━━━━━ PLOTS (only BUY/SELL on candles) ━━━━━━━━━━━━━
-plotshape(buySig,  title="BUY",  style=shape.arrowup,   location=location.belowbar, text="BUY",  size=size.tiny)
-plotshape(sellSig, title="SELL", style=shape.arrowdown, location=location.abovebar, text="SELL", size=size.tiny)
+// ━━━━━━━━━━━━━ Liquidation + PnL (per trade) ━━━━━━━━━━━━━
+var float entryPrice = na
+var float liqPrice   = na
+
+// Approx liquidation for LONG (linear, simplified)
+f_liq_long(_entry, _lev, _buf) =>
+    _lev <= 1 ? na : _entry * (1 - 1 / _lev) * (1 - _buf)
+
+// Notional size from margin + leverage
+posNotionalUsd = marginUsd * leverage
+
+// On BUY: store entry + liq
+if buySig
+    entryPrice := close
+    liqPrice := f_liq_long(entryPrice, leverage, maintBuf)
+
+    if showTradeLabels
+        txt = str.format("BUY\nEntry: {0}\nLiq x{1}: {2}\nNotional: ${3}", str.tostring(entryPrice, "#.##"), str.tostring(leverage), na(liqPrice) ? "n/a" : str.tostring(liqPrice, "#.##"), str.tostring(posNotionalUsd, "#.##"))
+        label.new(bar_index, low, txt, style=label.style_label_up, textcolor=color.white, color=color.new(color.green, 0))
+
+// On SELL: compute PnL$ for linear contract: PnL = Notional * (exit-entry)/entry
+if sellSig and not na(entryPrice)
+    exitPrice = close
+    pnlUsd = posNotionalUsd * (exitPrice - entryPrice) / entryPrice
+    roiOnMargin = pnlUsd / marginUsd * 100.0
+
+    if showTradeLabels
+        txt = str.format("SELL\nExit: {0}\nPnL: ${1}\nROI on margin: {2}%", str.tostring(exitPrice, "#.##"), str.tostring(pnlUsd, "#.##"), str.tostring(roiOnMargin, "#.##"))
+        label.new(bar_index, high, txt, style=label.style_label_down, textcolor=color.white, color=color.new(color.red, 0))
+
+    // reset
+    entryPrice := na
+    liqPrice := na
+
+// ━━━━━━━━━━━━━ PLOTS (only BUY/SELL marks) ━━━━━━━━━━━━━
+plotshape(buySig,  title="BUY",  style=shape.labelup,   location=location.belowbar, text="BUY",  size=size.tiny)
+plotshape(sellSig, title="SELL", style=shape.labeldown, location=location.abovebar, text="SELL", size=size.tiny)
 
 if showScoreLabel and sellSig
-    label.new(bar_index, high, "SELL score=" + str.tostring(sellScore), style=label.style_label_down, textcolor=color.white, color=color.new(color.red, 0))
+    label.new(bar_index, high, "SELL score=" + str.tostring(sellScore), style=label.style_label_down, textcolor=color.white, color=color.new(color.black, 40))
