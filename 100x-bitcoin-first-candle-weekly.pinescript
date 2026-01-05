@@ -54,20 +54,29 @@ rsiMTF = useMultiTF ? request.security(syminfo.tickerid, signalTF, f_rsi()) : rs
 sma20Display = useMultiTF ? request.security(syminfo.tickerid, signalTF, f_sma20()) : ta.sma(close, 20)
 
 // ━━━━━━━━━━━━━ CRASH DETECTION (Violent Selloff) ━━━━━━━━━━━━━
-// Calculate price drop over crash period
-priceChange = ((close - close[crashPeriod]) / close[crashPeriod]) * 100
+// Functions for crash detection on selected timeframe
+f_priceChange() => ((close - close[crashPeriod]) / close[crashPeriod]) * 100
+f_avgVolume() => ta.sma(volume, 50)
+f_sma50() => ta.sma(close, 50)
+f_sma200() => ta.sma(close, 200)
+
+// Get crash data from selected signal timeframe (or chart TF if MTF disabled)
+priceChange = useMultiTF ? request.security(syminfo.tickerid, signalTF, f_priceChange()) : ((close - close[crashPeriod]) / close[crashPeriod]) * 100
+avgVolume = useMultiTF ? request.security(syminfo.tickerid, signalTF, f_avgVolume()) : ta.sma(volume, 50)
+volumeMTF = useMultiTF ? request.security(syminfo.tickerid, signalTF, volume) : volume
+rsiForCrash = useMultiTF ? rsiMTF : rsi
 
 // Calculate volume surge
-avgVolume = ta.sma(volume, 50)
-volumeSurge = volume > (avgVolume * volumeSpike)
+volumeSurge = volumeMTF > (avgVolume * volumeSpike)
 
 // Detect violent crash: big price drop + high volume + RSI oversold
-violentCrash = (priceChange <= crashThreshold) and volumeSurge and (rsi < 35)
+violentCrash = (priceChange <= crashThreshold) and volumeSurge and (rsiForCrash < 35)
 
 // Additional confirmation: price below multiple moving averages (bearish structure)
-sma50 = ta.sma(close, 50)
-sma200 = ta.sma(close, 200)
-deepBearish = close < sma50 and close < sma200
+sma50 = useMultiTF ? request.security(syminfo.tickerid, signalTF, f_sma50()) : ta.sma(close, 50)
+sma200 = useMultiTF ? request.security(syminfo.tickerid, signalTF, f_sma200()) : ta.sma(close, 200)
+closeMTF = useMultiTF ? request.security(syminfo.tickerid, signalTF, close) : close
+deepBearish = closeMTF < sma50 and closeMTF < sma200
 
 // Potential BOTTOM signal: violent crash in deep bear market
 potentialBottom = violentCrash and deepBearish
@@ -171,10 +180,11 @@ if sellSig and showTradeLabels and not na(entryPrice)
 
 // ━━━━━━━━━━━━━ CRASH ZONE LABELS ━━━━━━━━━━━━━
 if showCrashZones and potentialBottom
-    crashLabel = "⚠️ VIOLENT CRASH\n" + 
+    tfLabel = useMultiTF ? " [" + signalTF + "]" : ""
+    crashLabel = "⚠️ Violent crash" + tfLabel + "\n" + 
                  "Drop: " + str.tostring(priceChange, "#.##") + "%\n" + 
-                 "RSI: " + str.tostring(rsi, "#.##") + "\n" + 
-                 "Volume: " + str.tostring(volume/avgVolume, "#.#") + "x avg\n" + 
+                 "RSI: " + str.tostring(rsiForCrash, "#.##") + "\n" + 
+                 "Volume: " + str.tostring(volumeMTF/avgVolume, "#.#") + "x avg\n" + 
                  "⭐ POTENTIAL BOTTOM"
     label.new(bar_index, high * 1.05, crashLabel, 
               style=label.style_label_down, 
@@ -184,7 +194,8 @@ if showCrashZones and potentialBottom
 
 // Mark violent crashes without bottom confirmation
 if showCrashZones and violentCrash and not deepBearish
-    crashLabel = "💥 CRASH\n" + str.tostring(priceChange, "#.##") + "%\n" + "RSI: " + str.tostring(rsi, "#.##")
+    tfLabel = useMultiTF ? " [" + signalTF + "]" : ""
+    crashLabel = "💥 CRASH" + tfLabel + "\n" + str.tostring(priceChange, "#.##") + "%\n" + "RSI: " + str.tostring(rsiForCrash, "#.##")
     label.new(bar_index, high * 1.03, crashLabel, 
               style=label.style_label_down, 
               color=color.new(color.orange, 30), 
