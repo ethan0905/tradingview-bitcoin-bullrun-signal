@@ -1,0 +1,123 @@
+//@version=5
+indicator("BTC 5m ARM→BUY→SELL + Anchored TP/SL Boxes", overlay=true, max_boxes_count=100, max_labels_count=200)
+
+// ━━━━━━━━━━━━━ INPUTS ━━━━━━━━━━━━━
+boxWidth  = input.int(30, "Box Extension (Bars)", minval=10)
+
+// ARM/BUY engine (2-step)
+rsiLen     = input.int(14, "RSI length", minval=2)
+armLvl     = input.int(30, "ARM si RSI <=", minval=1, maxval=60)
+confirmLvl = input.int(42, "BUY si RSI croise au-dessus", minval=1, maxval=80)
+expiryBars = input.int(60, "Expiration armement (bars)", minval=5)
+
+useTrend   = input.bool(false, "Filtre tendance EMA200")
+showEMA200 = input.bool(false, "Afficher EMA200")
+
+// Risk/Target for boxes (ATR based)
+atrLen   = input.int(14, "ATR length", minval=1)
+stopATR  = input.float(2.2, "Stop = ATR x", step=0.1)
+rrTarget = input.float(1.3, "Target RR", step=0.1)
+
+// SELL logic
+exitRsiLvl    = input.int(54, "SELL: RSI recasse sous", minval=1, maxval=99)
+trailLookback = input.int(18, "SELL: Chandelier lookback", minval=1)
+trailATRmult  = input.float(2.6, "SELL: Chandelier ATR x", step=0.1)
+
+// ━━━━━━━━━━━━━ INDICATORS ━━━━━━━━━━━━━
+rsi = ta.rsi(close, rsiLen)
+atr = ta.atr(atrLen)
+
+ema200 = ta.ema(close, 200)
+plot(showEMA200 ? ema200 : na, "EMA200", linewidth=2)
+
+trendOk = (not useTrend) or (close > ema200)
+
+// ━━━━━━━━━━━━━ 2-STEP ENGINE ━━━━━━━━━━━━━
+var bool armed   = false
+var int  armedAt = na
+
+armCond = trendOk and (rsi <= armLvl)
+
+if armCond
+    armed := true
+    armedAt := bar_index
+
+if armed and not na(armedAt) and (bar_index - armedAt > expiryBars)
+    armed := false
+    armedAt := na
+
+buySig = armed and ta.crossover(rsi, confirmLvl)
+
+if buySig
+    armed := false
+    armedAt := na
+
+// ━━━━━━━━━━━━━ SELL SIGNAL ━━━━━━━━━━━━━
+chandelierStop = ta.highest(high, trailLookback) - atr * trailATRmult
+sellSig = ta.crossunder(rsi, exitRsiLvl) or ta.crossunder(close, chandelierStop)
+
+// ━━━━━━━━━━━━━ MARKERS (lisibles) ━━━━━━━━━━━━━
+plotshape(armCond, title="ARM",  style=shape.circle, location=location.bottom, size=size.tiny, text="ARM")
+plotshape(buySig,  title="BUY",  style=shape.arrowup, location=location.belowbar, size=size.tiny, text="BUY")
+plotshape(sellSig, title="SELL", style=shape.arrowdown, location=location.abovebar, size=size.tiny, text="SELL")
+
+// ━━━━━━━━━━━━━ ANCHORED BOX ENGINE (comme ton exemple) ━━━━━━━━━━━━━
+var bool  inTrade = false
+var float ent = na
+var float tp  = na
+var float sl  = na
+
+var box profitBox = na
+var box riskBox   = na
+
+// On mémorise l’index d’entrée pour gérer les cas où SELL arrive très vite
+var int entryIndex = na
+
+if (not inTrade) and buySig
+    inTrade := true
+    ent := close
+    entryIndex := bar_index
+
+    // ATR-based TP/SL
+    sl := ent - atr * stopATR
+    tp := ent + (ent - sl) * rrTarget
+
+    // Anchor points
+    p_start = chart.point.from_index(bar_index, ent)
+    p_tp    = chart.point.from_index(bar_index + boxWidth, tp)
+    p_sl    = chart.point.from_index(bar_index + boxWidth, sl)
+
+    // Boxes
+    profitBox := box.new(p_start, p_tp, bgcolor=color.new(color.lime, 80), border_color=color.lime)
+    riskBox   := box.new(p_start, p_sl, bgcolor=color.new(color.red, 80),  border_color=color.red)
+
+    // Labels
+    label.new(p_start, text="ENTRY: " + str.tostring(ent, "#.##"), style=label.style_label_right, color=color.new(color.white, 100), textcolor=color.white, size=size.small)
+
+    label.new(p_tp, text="⭐ TP: " + str.tostring(tp, "#.##"), style=label.style_label_down, color=color.new(color.black, 100), textcolor=color.white, size=size.small)
+
+    label.new(p_sl, text="❌ SL: " + str.tostring(sl, "#.##"), style=label.style_label_up, color=color.new(color.black, 100), textcolor=color.white, size=size.small)
+
+// SELL only after BUY (sequential)
+if inTrade and sellSig
+    p_exit = chart.point.from_index(bar_index, close)
+
+    label.new(p_exit, text="EXIT: " + str.tostring(close, "#.##"), style=label.style_label_left, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+
+    // Color the boxes based on result at exit
+    win = close > ent
+    if not na(profitBox)
+        box.set_bgcolor(profitBox, win ? color.new(color.lime, 75) : color.new(color.gray, 85))
+        box.set_border_color(profitBox, win ? color.lime : color.gray)
+    if not na(riskBox)
+        box.set_bgcolor(riskBox, win ? color.new(color.gray, 85) : color.new(color.red, 75))
+        box.set_border_color(riskBox, win ? color.gray : color.red)
+
+    // Reset cycle
+    inTrade := false
+    ent := na
+    tp := na
+    sl := na
+    entryIndex := na
+    profitBox := na
+    riskBox := na
