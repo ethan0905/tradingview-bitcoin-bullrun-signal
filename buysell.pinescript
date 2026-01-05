@@ -1,5 +1,5 @@
 //@version=5
-indicator("4H Alternating BUY/SELL — SELL Score (A+C+D) + Liq x100 + PnL$", overlay=true, max_labels_count=500)
+indicator("4H Alternating BUY/SELL — SELL Score (A+C+D) + Liq x100 + PnL$ (Position-based)", overlay=true, max_labels_count=500)
 
 // ━━━━━━━━━━━━━ INPUTS ━━━━━━━━━━━━━
 // BUY (simple 2-step oversold bounce)
@@ -12,11 +12,11 @@ buyExpiry  = input.int(200, "BUY Arm Expiry (bars)", minval=5)  // en 4H tu peux
 sellScoreThresh = input.int(3, "SELL score threshold (1-5)", minval=1, maxval=5)
 
 // A) Momentum fade
-rsiFadeLvl  = input.int(55, "A: RSI fade level (crossunder)", minval=1, maxval=99)
-macdFast    = input.int(12, "MACD fast", minval=1)
-macdSlow    = input.int(26, "MACD slow", minval=1)
-macdSig     = input.int(9,  "MACD signal", minval=1)
-histDecBars = input.int(2, "A: MACD hist decreasing bars", minval=1, maxval=5)
+rsiFadeLvl   = input.int(55, "A: RSI fade level (crossunder)", minval=1, maxval=99)
+macdFast     = input.int(12, "MACD fast", minval=1)
+macdSlow     = input.int(26, "MACD slow", minval=1)
+macdSig      = input.int(9,  "MACD signal", minval=1)
+histDecBars  = input.int(2, "A: MACD hist decreasing bars", minval=1, maxval=5)
 
 // C) Break structure (swing low)
 pivotL = input.int(3, "C: Pivot left", minval=1, maxval=20)
@@ -28,10 +28,10 @@ atrLen        = input.int(14, "ATR length", minval=1)
 trailLookback = input.int(18, "D: Chandelier lookback", minval=1)
 trailATRmult  = input.float(2.6, "D: Chandelier ATR x", step=0.1)
 
-// Liquidation + PnL settings
-leverage  = input.int(100, "Leverage", minval=1)                 // demandé x100
-maintBuf  = input.float(0.005, "Maintenance buffer (0.5% = 0.005)", minval=0.0, step=0.001)
-marginUsd = input.float(100.0, "Margin used per trade ($)", minval=1.0, step=1.0) // pour calcul PnL$
+// Position sizing + Liquidation + PnL
+positionUsd = input.float(1000.0, "Position size per trade ($)", minval=1.0, step=10.0)
+leverage    = input.int(100, "Leverage", minval=1)  // demandé x100
+maintBuf    = input.float(0.005, "Maintenance buffer (0.5% = 0.005)", minval=0.0, step=0.001)
 
 showTradeLabels = input.bool(true, "Afficher labels trade (BUY/SELL + liq + pnl)")
 showScoreLabel  = input.bool(false, "Afficher SELL score (debug)")
@@ -99,37 +99,36 @@ sellSig = inTrade and (sellScore >= sellScoreThresh)
 if sellSig
     inTrade := false
 
-// ━━━━━━━━━━━━━ Liquidation + PnL (per trade) ━━━━━━━━━━━━━
-var float entryPrice = na
-var float liqPrice   = na
+// ━━━━━━━━━━━━━ Liquidation + PnL (position-based) ━━━━━━━━━━━━━
+// Notional controlled by your fixed position sizing
+notionalUsd = positionUsd * leverage
 
 // Approx liquidation for LONG (linear, simplified)
 f_liq_long(_entry, _lev, _buf) =>
     _lev <= 1 ? na : _entry * (1 - 1 / _lev) * (1 - _buf)
 
-// Notional size from margin + leverage
-posNotionalUsd = marginUsd * leverage
+var float entryPrice = na
+var float liqPrice   = na
 
-// On BUY: store entry + liq
+// On BUY: store entry + liq and show label
 if buySig
     entryPrice := close
     liqPrice := f_liq_long(entryPrice, leverage, maintBuf)
 
     if showTradeLabels
-        txt = str.format("BUY\nEntry: {0}\nLiq x{1}: {2}\nNotional: ${3}", str.tostring(entryPrice, "#.##"), str.tostring(leverage), na(liqPrice) ? "n/a" : str.tostring(liqPrice, "#.##"), str.tostring(posNotionalUsd, "#.##"))
+        txt = str.format("BUY\nEntry: {0}\nPosition: ${1}\nLeverage: x{2}\nNotional: ${3}\nLiq ≈ {4}",str.tostring(entryPrice, "#.##"),str.tostring(positionUsd, "#.##"),str.tostring(leverage),str.tostring(notionalUsd, "#.##"),na(liqPrice) ? "n/a" : str.tostring(liqPrice, "#.##"))
         label.new(bar_index, low, txt, style=label.style_label_up, textcolor=color.white, color=color.new(color.green, 0))
 
-// On SELL: compute PnL$ for linear contract: PnL = Notional * (exit-entry)/entry
+// On SELL: compute PnL$ for linear: PnL = Notional * (exit-entry)/entry
 if sellSig and not na(entryPrice)
     exitPrice = close
-    pnlUsd = posNotionalUsd * (exitPrice - entryPrice) / entryPrice
-    roiOnMargin = pnlUsd / marginUsd * 100.0
+    pnlUsd = notionalUsd * (exitPrice - entryPrice) / entryPrice
+    roiPct = pnlUsd / positionUsd * 100.0
 
     if showTradeLabels
-        txt = str.format("SELL\nExit: {0}\nPnL: ${1}\nROI on margin: {2}%", str.tostring(exitPrice, "#.##"), str.tostring(pnlUsd, "#.##"), str.tostring(roiOnMargin, "#.##"))
+        txt = str.format("SELL\nExit: {0}\nPnL: ${1}\nROI: {2}%",str.tostring(exitPrice, "#.##"),str.tostring(pnlUsd, "#.##"),str.tostring(roiPct, "#.##"))
         label.new(bar_index, high, txt, style=label.style_label_down, textcolor=color.white, color=color.new(color.red, 0))
 
-    // reset
     entryPrice := na
     liqPrice := na
 
