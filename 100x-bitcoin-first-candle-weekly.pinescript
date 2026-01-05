@@ -17,7 +17,7 @@ macdSlow = input.int(26, "MACD slow", minval=1)
 macdSig  = input.int(9,  "MACD signal", minval=1)
 
 // Position sizing + Liquidation + PnL
-positionUsd = input.float(1000.0, "Position size per trade ($)", minval=1.0, step=10.0)
+positionUsd = input.float(10000.0, "Position size per trade ($)", minval=1.0, step=10.0)
 leverage    = input.int(100, "Leverage", minval=1)
 maintBuf    = input.float(0.005, "Maintenance buffer (0.5%)", step=0.001)
 
@@ -27,9 +27,15 @@ showMACD        = input.bool(true, "Afficher MACD (TF fixée, bas du chart)")
 macdTF          = input.timeframe("M", "MACD Timeframe affichage (ex: M, W, D, 240)")
 macdScale       = input.float(0.02, "MACD visual scale", step=0.005)
 
+// Additional indicators
+showSMA20       = input.bool(true, "Afficher SMA 20")
+
 // ━━━━━━━━━━━━━ INDICATORS (chart TF) ━━━━━━━━━━━━━
 rsi = ta.rsi(close, rsiLen)
 atr = ta.atr(14)  // only for visual placement of MACD band
+
+// SMA 20
+sma20 = ta.sma(close, 20)
 
 // ━━━━━━━━━━━━━ MACD (fixed TF display ONLY) ━━━━━━━━━━━━━
 f_macdLine() =>
@@ -52,6 +58,9 @@ plot(showMACD ? (macdBase + macdLineTF * macdScale)   : na, title="MACD Line (di
 plot(showMACD ? (macdBase + signalLineTF * macdScale) : na, title="Signal Line (display TF)", color=color.orange, linewidth=1)
 plot(showMACD ? (macdBase + histTF * macdScale)       : na, title="MACD Hist (display TF)",   style=plot.style_columns,
      color=(histTF >= 0 ? color.new(color.green, 30) : color.new(color.red, 30)))
+
+// ━━━━━━━━━━━━━ SMA 20 DISPLAY ━━━━━━━━━━━━━
+plot(showSMA20 ? sma20 : na, title="SMA 20", color=color.new(color.purple, 0), linewidth=2)
 
 // ━━━━━━━━━━━━━ MACD MONTHLY (used for SELL condition) ━━━━━━━━━━━━━
 macdHistM = request.security(syminfo.tickerid, "M", f_macdHist())
