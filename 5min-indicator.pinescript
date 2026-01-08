@@ -1,0 +1,261 @@
+//@creator ethan-safar
+//@date 05/01/2026
+//@version=5
+indicator("100x Explosive Breakout Scalping 5min", overlay=true, max_labels_count=500)
+
+// ━━━━━━━━━━━━━ INPUTS ━━━━━━━━━━━━━
+// Breakout Detection
+bbLength    = input.int(20, "BB Length", minval=10)
+bbMult      = input.float(2.0, "BB Multiplier", minval=1.0, step=0.1)
+compressionThreshold = input.float(2.5, "Compression % (BB squeeze)", minval=1.0, step=0.5)
+
+// Momentum
+rsiLen      = input.int(14, "RSI Length", minval=5)
+rsiBreakout = input.int(55, "RSI Breakout Level", minval=50, maxval=70)
+macdFast    = input.int(12, "MACD Fast", minval=5)
+macdSlow    = input.int(26, "MACD Slow", minval=10)
+macdSig     = input.int(9, "MACD Signal", minval=5)
+
+// Volume
+volumeExplosion = input.float(2.0, "Volume Explosion (x avg)", minval=1.5, step=0.5)
+
+// Risk Management (Momentum-based exit)
+stopLossPct = input.float(1.0, "Stop Loss %", minval=0.5, maxval=2.0, step=0.1)
+minProfitPct = input.float(0.8, "Min Profit to Exit %", minval=0.3, step=0.1)  // Must be in profit before momentum exit
+useMomentumExit = input.bool(true, "Use Momentum Exit (recommended)")
+useFixedTP = input.bool(false, "Use Fixed TP (not recommended)")
+fixedTPPct = input.float(5.0, "Fixed TP % (if enabled)", minval=2.0, step=0.5)
+
+// Position
+positionUsd = input.float(10000.0, "Position ($)", minval=100.0, step=100.0)
+leverage    = input.int(100, "Leverage", minval=1, maxval=125)
+
+// Visuals
+showLabels = input.bool(false, "Show Trade Labels")
+showLevels = input.bool(false, "Show Trade Levels")
+
+// ━━━━━━━━━━━━━ INDICATORS ━━━━━━━━━━━━━
+// Bollinger Bands
+[bbMiddle, bbUpper, bbLower] = ta.bb(close, bbLength, bbMult)
+bbWidth = ((bbUpper - bbLower) / bbMiddle) * 100
+
+// RSI
+rsi = ta.rsi(close, rsiLen)
+
+// MACD
+[macdLine, signalLine, macdHist] = ta.macd(close, macdFast, macdSlow, macdSig)
+
+// EMAs
+ema20 = ta.ema(close, 20)
+ema50 = ta.ema(close, 50)
+
+// Volume
+volAvg = ta.sma(volume, 20)
+volExplosive = volume >= (volAvg * volumeExplosion)
+
+// ATR
+atr = ta.atr(14)
+
+// ━━━━━━━━━━━━━ BREAKOUT DETECTION ━━━━━━━━━━━━━
+// 1. Compression phase (BB squeeze) - Volatilité faible = explosion imminente
+isCompressed = bbWidth < compressionThreshold
+
+// 2. Breakout au-dessus de BB middle avec force
+priceBreakout = ta.crossover(close, bbMiddle) or (close > bbMiddle and close[1] <= bbMiddle)
+
+// 3. Volume explosion - Money flowing in
+volumeConfirm = volExplosive
+
+// 4. RSI showing strength but not overbought yet
+rsiStrength = rsi > rsiBreakout and rsi < 75
+
+// 5. MACD momentum turning bullish FAST
+macdMomentum = macdHist > 0 and macdHist > macdHist[1] and macdLine > signalLine
+
+// 6. Price above EMA20 (short-term trend)
+trendOk = close > ema20
+
+// ━━━━━━━━━━━━━ ENTRY SIGNAL (The Explosive Setup) ━━━━━━━━━━━━━
+// Confluence of ALL conditions = HIGH probability explosive move
+buySig = priceBreakout and volumeConfirm and rsiStrength and macdMomentum and trendOk
+
+// Alternative: Catching the rocket mid-flight (less strict)
+buyAggressive = volExplosive and (close > close[1] * 1.005) and macdMomentum and rsiStrength
+
+// ━━━━━━━━━━━━━ TRADE MANAGEMENT (Momentum-based) ━━━━━━━━━━━━━
+var bool inTrade = false
+var float entryPrice = na
+var float stopLoss = na
+var float fixedTP = na
+var float highestPrice = na
+var int barsInTrade = 0
+var float liqPrice = na
+var bool sellCallShown = false  // Track if we've shown the sell call for this trade
+
+// ━━━━━━━━━━━━━ SHORT-TERM MOMENTUM EVALUATION ━━━━━━━━━━━━━
+// Real-time momentum scoring system for buy/sell calls
+// Score components:
+momentumScore = 0
+
+// 1. Price momentum (max 3 points)
+priceUp3Bars = close > close[1] and close[1] > close[2] and close[2] > close[3]
+priceDown3Bars = close < close[1] and close[1] < close[2] and close[2] < close[3]
+momentumScore := momentumScore + (priceUp3Bars ? 3 : 0)
+momentumScore := momentumScore + (priceDown3Bars ? -3 : 0)
+
+// 2. RSI momentum (max 2 points)
+rsiRising = rsi > rsi[1] and rsi[1] > rsi[2]
+rsiFalling = rsi < rsi[1] and rsi[1] < rsi[2]
+momentumScore := momentumScore + (rsiRising and rsi > 50 ? 2 : 0)
+momentumScore := momentumScore + (rsiFalling and rsi < 50 ? -2 : 0)
+
+// 3. MACD momentum (max 2 points)
+macdCrossUp = ta.crossover(macdLine, signalLine)
+macdCrossDown = ta.crossunder(macdLine, signalLine)
+momentumScore := momentumScore + (macdCrossUp or (macdHist > 0 and macdHist > macdHist[1]) ? 2 : 0)
+momentumScore := momentumScore + (macdCrossDown or (macdHist < 0 and macdHist < macdHist[1]) ? -2 : 0)
+
+// 4. Volume confirmation (max 2 points)
+momentumScore := momentumScore + (volExplosive and close > open ? 2 : 0)
+momentumScore := momentumScore + (volExplosive and close < open ? -2 : 0)
+
+// 5. EMA alignment (max 1 point)
+momentumScore := momentumScore + (close > ema20 and ema20 > ema50 ? 1 : 0)
+momentumScore := momentumScore + (close < ema20 and ema20 < ema50 ? -1 : 0)
+
+// ━━━━━━━━━━━━━ AUTOMATIC BUY/SELL CALLS ━━━━━━━━━━━━━
+// Simple buy/sell calls based on momentum (score >= 5)
+buyCall = momentumScore >= 5 and not inTrade
+// Only show SELL when we have an active trade and haven't shown it yet
+sellCall = momentumScore <= -5 and inTrade and not sellCallShown
+
+// Add momentum calls to buy signal
+buySig := buySig or buyCall
+
+// ENTRY
+if buySig and not inTrade
+    inTrade := true
+    entryPrice := close
+    stopLoss := close * (1 - stopLossPct / 100)
+    fixedTP := useFixedTP ? close * (1 + fixedTPPct / 100) : na
+    highestPrice := close
+    barsInTrade := 0
+    sellCallShown := false  // Reset sell call flag on new trade
+    // Calculate liquidation price for long position
+    // Liq = Entry * (1 - 1/Leverage * (1 - maintenance_margin))
+    // Using 0.5% maintenance margin for simplicity
+    liqPrice := close * (1 - 1 / leverage * (1 - 0.005))
+
+// Mark sell call as shown when it triggers
+if sellCall
+    sellCallShown := true
+
+// Update during trade
+if inTrade
+    barsInTrade := barsInTrade + 1
+    if close > highestPrice
+        highestPrice := close
+
+// ━━━━━━━━━━━━━ EXIT LOGIC (Momentum-based) ━━━━━━━━━━━━━
+// Calculate current profit
+currentProfitPct = inTrade and not na(entryPrice) ? ((close - entryPrice) / entryPrice * 100) : 0
+
+// Basic exits
+hitStopLoss = inTrade and (low <= stopLoss)
+hitFixedTP = inTrade and useFixedTP and not na(fixedTP) and (high >= fixedTP)
+hitLiquidation = inTrade and not na(liqPrice) and (low <= liqPrice)
+
+// ━━━━ MOMENTUM EXIT SIGNALS (the smart part) ━━━━
+// 1. MACD momentum weakening
+macdWeakening = macdHist < macdHist[1] and macdHist[1] < macdHist[2]  // 2 bars of declining momentum
+
+// 2. Price breaks below EMA20 (lost short-term support)
+lostEMA20Support = ta.crossunder(close, ema20) or (close < ema20 and close[1] >= ema20)
+
+// 3. RSI Divergence (price higher but RSI lower = weakness)
+rsiDivergence = (close > close[1]) and (rsi < rsi[1]) and (rsi < rsi[2])
+
+// 4. Volume drying up (no more buyers)
+volumeDrying = volume < volAvg * 0.7  // Volume dropped significantly
+
+// 5. Strong red candle (reversal signal)
+strongRedCandle = (close < open) and ((open - close) > atr * 0.5)
+
+// 6. RSI overbought + turning down
+rsiOverboughtTurn = (rsi > 70) and (rsi < rsi[1])
+
+// Combine momentum exit signals (any of these = exit if profitable)
+momentumExitSignal = useMomentumExit and (currentProfitPct >= minProfitPct) and (macdWeakening or lostEMA20Support or rsiDivergence or  (volumeDrying and barsInTrade > 3) or strongRedCandle or rsiOverboughtTurn)
+
+// FINAL SELL DECISION (including momentum sell call)
+sellSig = inTrade and (hitStopLoss or hitFixedTP or momentumExitSignal or hitLiquidation or sellCall)
+
+// Determine exit details
+var string exitReason = ""
+var float exitPrice = na
+
+if sellSig
+    if hitLiquidation
+        exitPrice := liqPrice
+        exitReason := "💀 LIQUIDATION"
+    else if hitStopLoss
+        exitPrice := stopLoss
+        exitReason := "🛑 STOP LOSS"
+    else if hitFixedTP
+        exitPrice := fixedTP
+        exitReason := "🎯 FIXED TP"
+    else if macdWeakening
+        exitPrice := close
+        exitReason := "📉 MACD WEAKENING"
+    else if lostEMA20Support
+        exitPrice := close
+        exitReason := "⚠️ LOST EMA20"
+    else if rsiDivergence
+        exitPrice := close
+        exitReason := "🔻 RSI DIVERGENCE"
+    else if volumeDrying
+        exitPrice := close
+        exitReason := "� VOLUME DRYING"
+    else if strongRedCandle
+        exitPrice := close
+        exitReason := "🔴 RED CANDLE"
+    else if rsiOverboughtTurn
+        exitPrice := close
+        exitReason := "� RSI OVERBOUGHT"
+    else
+        exitPrice := close
+        exitReason := "🚪 MOMENTUM EXIT"
+    
+    // Reset trade state
+    inTrade := false
+    entryPrice := na
+    stopLoss := na
+    fixedTP := na
+    highestPrice := na
+    barsInTrade := 0
+
+// ━━━━━━━━━━━━━ PnL CALCULATION ━━━━━━━━━━━━━
+notionalUsd = positionUsd * leverage
+
+var float pnlUsd = na
+var float pnlPct = na
+var float roiPct = na
+
+if sellSig and not na(entryPrice) and not na(exitPrice)
+    pnlPct := ((exitPrice - entryPrice) / entryPrice) * 100
+    pnlUsd := notionalUsd * pnlPct / 100
+    roiPct := (pnlUsd / positionUsd) * 100
+
+// ━━━━━━━━━━━━━ VISUAL PLOTS ━━━━━━━━━━━━━
+// EMAs (minimal)
+plot(ema20, "EMA 20", color=color.new(color.blue, 70), linewidth=1)
+plot(ema50, "EMA 50", color=color.new(color.orange, 70), linewidth=1)
+
+// ━━━━━━━━━━━━━ VISUAL SIGNALS ━━━━━━━━━━━━━
+// Simple BUY/SELL signals only
+plotshape(buyCall, title="BUY", style=shape.labelup, location=location.belowbar, color=color.new(color.lime, 0), size=size.normal, text="BUY", textcolor=color.white)
+plotshape(sellCall, title="SELL", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 0), size=size.normal, text="SELL", textcolor=color.white)
+
+// Alerts
+alertcondition(buyCall, "BUY", "Buy momentum detected!")
+alertcondition(sellCall, "SELL", "Sell momentum detected!")
